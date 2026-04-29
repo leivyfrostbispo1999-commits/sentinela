@@ -1,0 +1,55 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: sentinela-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: sentinela-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  db:
+    image: postgres:15-alpine
+    container_name: sentinela-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: sentinela
+    ports:
+      - "5432:5432"
+
+  simulator:
+    build: ./services/simulator
+    container_name: sentinela-simulator
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: 'kafka:29092'
+
+  rule-engine:
+    build: ./services/rule-engine
+    container_name: sentinela-rule-engine
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: 'kafka:29092'
+
+  alert-service:
+    build: ./services/alert-service
+    container_name: sentinela-alert-service
+    depends_on:
+      - kafka
+      - db
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: 'kafka:29092'
