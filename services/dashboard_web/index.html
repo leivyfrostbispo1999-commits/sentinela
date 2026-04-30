@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SENTINELA IDS | Tactical Command Center</title>
+    <link rel="stylesheet" href="https://cloudflare.com">
+    <link href="https://googleapis.com" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #020408;
+            --glass-bg: rgba(13, 17, 23, 0.7);
+            --border-glow: rgba(56, 139, 253, 0.15);
+            --critical-red: #ff3333;
+            --warning-gold: #ffcc00;
+            --safe-green: #00f291;
+            --text-main: #c9d1d9;
+            --text-dim: #8b949e;
+        }
+
+        * { box-sizing: border-box; transition: all 0.2s ease-in-out; }
+        
+        body { 
+            background: radial-gradient(circle at top right, #0d1117, var(--bg-deep));
+            color: var(--text-main); 
+            font-family: 'Inter', sans-serif; 
+            margin: 0; padding: 30px; 
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Scanline effect para look militar */
+        body::before {
+            content: " "; display: block; position: fixed; top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+            z-index: 9999; pointer-events: none; background-size: 100% 4px, 3px 100%;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        header { 
+            display: flex; justify-content: space-between; align-items: flex-end;
+            margin-bottom: 40px; border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding-bottom: 20px;
+        }
+
+        .brand h1 { 
+            font-size: 2rem; font-weight: 800; letter-spacing: -2px; margin: 0; color: #fff;
+            text-transform: uppercase; display: flex; align-items: center;
+        }
+        .brand h1 i { color: var(--critical-red); margin-right: 15px; filter: drop-shadow(0 0 8px var(--critical-red)); }
+        
+        .status-badge { 
+            font-family: 'JetBrains Mono'; font-size: 12px; color: var(--safe-green);
+            background: rgba(0, 242, 145, 0.1); padding: 5px 12px; border-radius: 4px;
+            display: flex; align-items: center; gap: 8px; border: 1px solid rgba(0, 242, 145, 0.2);
+        }
+        .pulse-dot { height: 8px; width: 8px; background: var(--safe-green); border-radius: 50%; animation: pulse 1.5s infinite; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 25px; margin-bottom: 40px; }
+
+        .card { 
+            background: var(--glass-bg); backdrop-filter: blur(10px);
+            border: 1px solid var(--border-glow); border-radius: 12px;
+            padding: 25px; position: relative; overflow: hidden;
+        }
+        .card::after { content: ""; position: absolute; top: 0; left: 0; width: 4px; height: 100%; }
+        
+        .card.critical::after { background: var(--critical-red); box-shadow: 0 0 15px var(--critical-red); }
+        .card.warning::after { background: var(--warning-gold); box-shadow: 0 0 15px var(--warning-gold); }
+        .card.safe::after { background: var(--safe-green); box-shadow: 0 0 15px var(--safe-green); }
+
+        .card h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: var(--text-dim); margin: 0 0 10px 0; }
+        .card .value { font-family: 'JetBrains Mono'; font-size: 42px; font-weight: 700; color: #fff; }
+
+        .table-wrap { 
+            background: var(--glass-bg); border: 1px solid var(--border-glow); 
+            border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4);
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+        th { 
+            background: rgba(255,255,255,0.02); padding: 15px 20px; text-align: left;
+            font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-dim);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        td { padding: 15px 20px; font-family: 'JetBrains Mono'; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.02); }
+        
+        .tag { 
+            padding: 4px 10px; border-radius: 3px; font-size: 10px; font-weight: 700; 
+            text-transform: uppercase; border: 1px solid transparent;
+        }
+        .tag-red { background: rgba(255, 51, 51, 0.1); color: var(--critical-red); border-color: rgba(255, 51, 51, 0.2); }
+        .tag-gold { background: rgba(255, 204, 0, 0.1); color: var(--warning-gold); border-color: rgba(255, 204, 0, 0.2); }
+        .tag-green { background: rgba(0, 242, 145, 0.1); color: var(--safe-green); border-color: rgba(0, 242, 145, 0.2); }
+
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="brand">
+                <h1><i class="fas fa-microchip"></i> SENTINELA <span style="font-weight: 300; opacity: 0.5;">CORE_IDS</span></h1>
+            </div>
+            <div class="status-badge">
+                <div class="pulse-dot"></div> ACTIVE_MONITORING: 100% OPERATIONAL
+            </div>
+        </header>
+
+        <div class="stats-grid">
+            <div class="card critical">
+                <h3><i class="fas fa-skull-crossbones"></i> Threat Neutralized</h3>
+                <div class="value" id="c-red">0</div>
+            </div>
+            <div class="card warning">
+                <h3><i class="fas fa-search-dollar"></i> Suspicious Activity</h3>
+                <div class="value" id="c-yellow">0</div>
+            </div>
+            <div class="card safe">
+                <h3><i class="fas fa-shield-check"></i> Encrypted Traffic</h3>
+                <div class="value" id="c-green">0</div>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>T-STAMP</th>
+                        <th>SOURCE_IP</th>
+                        <th>PROTOCOL_STATUS</th>
+                        <th>THREAT_LVL</th>
+                    </tr>
+                </thead>
+                <tbody id="logs"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function updateSOC() {
+            try {
+                const res = await fetch('http://localhost:5000/alertas');
+                const data = await res.json();
+                const logs = document.getElementById('logs');
+                logs.innerHTML = '';
+
+                let r=0, y=0, g=0;
+
+                data.forEach(item => {
+                    let tag = 'tag-green';
+                    if(item.risco >= 90) { tag = 'tag-red'; r++; }
+                    else if(item.risco >= 50) { tag = 'tag-gold'; y++; }
+                    else g++;
+
+                    logs.innerHTML += `
+                        <tr>
+                            <td style="color:var(--text-dim)">${item.ts}</td>
+                            <td style="color:#fff; font-weight:700">${item.ip}</td>
+                            <td><span class="tag ${tag}">${item.status}</span></td>
+                            <td style="font-weight:700; color: ${item.risco >= 90 ? 'var(--critical-red)' : 'var(--text-main)'}">${item.risco}%</td>
+                        </tr>
+                    `;
+                });
+
+                document.getElementById('c-red').innerText = r;
+                document.getElementById('c-yellow').innerText = y;
+                document.getElementById('c-green').innerText = g;
+            } catch (e) { console.log("Reconnecting to Command Center..."); }
+        }
+        setInterval(updateSOC, 500);
+        updateSOC();
+    </script>
+</body>
+</html>

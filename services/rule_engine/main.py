@@ -1,56 +1,40 @@
-import os
-import json
+import time, os, json
 from confluent_kafka import Consumer, Producer
 
-BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+print("🚀 MODO TURBO ATIVADO: Rule Engine v4.1")
 
-consumer = Consumer({
-    "bootstrap.servers": BOOTSTRAP,
-    "group.id": "rule-engine",
-    "auto.offset.reset": "earliest"
-})
+def conectar():
+    while True:
+        try:
+            c = Consumer({'bootstrap.servers': 'kafka:9092', 'group.id': 're-fast-v5', 'auto.offset.reset': 'latest'})
+            p = Producer({'bootstrap.servers': 'kafka:9092', 'linger.ms': 0})
+            c.list_topics(timeout=5)
+            print("✅ Conectado ao Kafka!")
+            return c, p
+        except:
+            time.sleep(2)
 
-producer = Producer({
-    "bootstrap.servers": BOOTSTRAP
-})
+def classificar(ip):
+    if ip.startswith("172.16"): return "🔴 ATAQUE: Brute Force", 90
+    if ip.startswith("10."): return "🟡 AVISO: Port Scan", 50
+    return "🟢 NORMAL: Tráfego Comum", 10
 
+consumer, producer = conectar()
 consumer.subscribe(["raw_logs"])
 
-print("Rule Engine iniciado...")
-
-def score(ip):
-    if ip.startswith("192.168"):
-        return 20
-    if ip.startswith("10."):
-        return 50
-    if ip.startswith("172.16"):
-        return 80
-    return 10
-
 while True:
-    msg = consumer.poll(1.0)
+    msg = consumer.poll(0.1)
+    if msg is None or msg.error(): continue
 
-    if msg is None:
-        continue
-
-    if msg.error():
-        print(msg.error())
-        continue
-
-    event = json.loads(msg.value().decode("utf-8"))
-
-    alert = {
-        "ip": event["ip"],
-        "risk": score(event["ip"]),
-        "ts": event["ts"]
-    }
-
-    producer.produce(
-        "alerts",
-        key=event["ip"],
-        value=json.dumps(alert)
-    )
-
-    producer.poll(0)
-
-    print("ALERTA:", alert)
+    try:
+        data = json.loads(msg.value().decode('utf-8'))
+        ip = data.get("ip", "0.0.0.0")
+        tipo, risco = classificar(ip)
+        
+        alerta = {"ip": ip, "status": tipo, "nivel_risco": risco, "ts": data.get("ts")}
+        
+        producer.produce("processed_logs", value=json.dumps(alerta).encode('utf-8'))
+        producer.flush() # Envia imediatamente
+        print(f"⚡ Processado: {ip} | {tipo}")
+    except Exception as e:
+        print(f"Erro: {e}")
