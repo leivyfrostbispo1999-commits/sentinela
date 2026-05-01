@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SENTINELA</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #050507;
+            color: #e2e8f0;
+            margin: 0;
+            padding: 30px 40px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .title {
+            font-size: 3.8em;
+            font-weight: 700;
+            color: #67e8f9;
+            text-shadow: 0 0 40px #67e8f9;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .siren {
+            font-size: 2.8em;
+            animation: sirenPulse 1.4s infinite alternate;
+        }
+
+        .status {
+            color: #4ade80;
+            font-size: 1.45em;
+            font-weight: 600;
+            margin-bottom: 40px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .status::before {
+            content: '';
+            width: 16px;
+            height: 16px;
+            background: #4ade80;
+            border-radius: 50%;
+            box-shadow: 0 0 25px #4ade80;
+            animation: pulse 2s infinite;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .controls input, .controls select {
+            background: #1e2937;
+            color: white;
+            border: 1px solid #67e8f9;
+            padding: 10px;
+            border-radius: 8px;
+            min-width: 200px;
+        }
+
+        .cards {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            flex-wrap: wrap;
+            margin-bottom: 50px;
+        }
+
+        .card {
+            background: rgba(15, 23, 42, 0.9);
+            border-radius: 22px;
+            padding: 32px 50px;
+            text-align: center;
+            min-width: 300px;
+            box-shadow: 0 0 50px rgba(103, 232, 249, 0.3);
+        }
+
+        .card h2 {
+            font-size: 5.5em;
+            font-weight: 700;
+            margin: 0 0 12px 0;
+        }
+
+        .red h2 { color: #f87171; text-shadow: 0 0 35px #f87171; }
+        .amber h2 { color: #fbbf24; text-shadow: 0 0 35px #fbbf24; }
+        .cyan h2 { color: #67e8f9; text-shadow: 0 0 35px #67e8f9; }
+
+        .table-container {
+            width: 100%;
+            max-width: 1200px;
+            max-height: 520px;
+            overflow-y: auto;
+            border-radius: 18px;
+            background: rgba(15, 23, 42, 0.9);
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.7);
+            scrollbar-width: thin;
+            scrollbar-color: #67e8f9 #1e2937;
+        }
+
+        .table-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .table-container::-webkit-scrollbar-thumb {
+            background: #67e8f9;
+            border-radius: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 18px 26px;
+            text-align: left;
+        }
+
+        th {
+            background: #0f172a;
+            color: #67e8f9;
+            position: sticky;
+            top: 0;
+        }
+
+        .threat { color: #f87171; font-weight: 600; }
+        .portscan { color: #fbbf24; font-weight: 600; }
+        .green { color: #4ade80; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="title">
+        <span class="siren">🚨</span>
+        SENTINELA
+    </div>
+    <div class="status">
+        ● ONLINE - Sistema Ativo e Protegendo sua Rede
+    </div>
+
+    <div class="controls">
+        <input type="text" id="searchInput" placeholder="Buscar por IP ou Status">
+        <select id="filterType">
+            <option value="">Todos os Tipos</option>
+            <option value="BRUTE FORCE">Brute Force</option>
+            <option value="PORT SCAN">Port Scan</option>
+            <option value="ATAQUE SSH">Ataque SSH</option>
+            <option value="TRÁFEGO NORMAL">Tráfego Normal</option>
+        </select>
+    </div>
+
+    <div class="cards">
+        <div class="card red">
+            <h2>139</h2>
+            <p>AMEAÇAS NEUTRALIZADAS</p>
+        </div>
+        <div class="card amber">
+            <h2>172</h2>
+            <p>ATIVIDADE SUSPEITA</p>
+        </div>
+        <div class="card cyan">
+            <h2>122</h2>
+            <p>TRÁFEGO CRIPTOGRAFADO</p>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <table id="alertTable">
+            <tr>
+                <th>DATA/HORA</th>
+                <th>IP DE ORIGEM</th>
+                <th>STATUS</th>
+                <th>NÍVEL DE AMEAÇA</th>
+            </tr>
+        </table>
+    </div>
+
+    <script>
+        const searchInput = document.getElementById('searchInput');
+        const filterType = document.getElementById('filterType');
+
+        function filterTable() {
+            const searchTerm = searchInput.value.toLowerCase();
+            const selectedType = filterType.value.toLowerCase();
+            const rows = document.querySelectorAll('#alertTable tr');
+
+            rows.forEach((row, index) => {
+                if (index === 0) return;
+                const cells = row.getElementsByTagName('td');
+                if (cells.length === 0) return;
+
+                const ip = cells[1].textContent.toLowerCase();
+                const status = cells[2].textContent.toLowerCase();
+
+                const matchesSearch = ip.includes(searchTerm) || status.includes(searchTerm);
+                const matchesType = !selectedType || status.includes(selectedType);
+
+                row.style.display = (matchesSearch && matchesType) ? '' : 'none';
+            });
+        }
+
+        searchInput.addEventListener('input', filterTable);
+        filterType.addEventListener('change', filterTable);
+
+        setInterval(() => {
+            const table = document.getElementById('alertTable');
+            const row = document.createElement('tr');
+            const types = [
+                {text: "BRUTE FORCE", class: "threat"},
+                {text: "PORT SCAN", class: "portscan"},
+                {text: "ATAQUE SSH", class: "threat"},
+                {text: "TRÁFEGO NORMAL", class: "green"}
+            ];
+            const type = types[Math.floor(Math.random() * types.length)];
+
+            row.innerHTML = `
+                <td>${new Date().toLocaleString('pt-BR')}</td>
+                <td>192.168.1.${Math.floor(Math.random()*255)}</td>
+                <td class="${type.class}">${type.text}</td>
+                <td>${Math.floor(Math.random()*90 + 10)}%</td>
+            `;
+            table.appendChild(row);
+
+            if (table.rows.length > 20) table.deleteRow(1);
+        }, 1100);
+    </script>
+</body>
+</html>

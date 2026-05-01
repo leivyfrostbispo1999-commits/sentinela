@@ -1,0 +1,4 @@
+function Open-NotepadNT {
+    & "C:\Caminho\Para\Seu\notepad.exe" "nt"
+}
+Set-Alias nt Open-NotepadNT
