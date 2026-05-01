@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 FROM python:3.11-slim
 
 # Instala dependências nativas para o conector do Postgres
@@ -14,3 +15,7 @@ COPY alert_sink.py ./main.py
 
 ENV PYTHONUNBUFFERED=1
 CMD ["python", "main.py"]
+=======
+FROM nginx:alpine
+COPY index.html /usr/share/nginx/html/index.html
+>>>>>>> f33ed383d8e88d290a27dd7885af588db7e1ce40
