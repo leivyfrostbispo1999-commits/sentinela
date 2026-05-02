@@ -11,16 +11,21 @@ services:
     environment:
       KAFKA_NODE_ID: 1
 <<<<<<< HEAD
-      KAFKA_PROCESS_ROLES: 'broker,controller'
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
-      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093'
-      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092'
-      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@localhost:29093'
-      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
-      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+
+  rule-engine:
+    build: ./services/rule_engine
+    container_name: sentinela-rule-engine
+    depends_on:
+      - kafka
 
   alert-sink:
     build: ./services/alert-sink
@@ -33,6 +38,30 @@ services:
     container_name: sentinela-simulator
     depends_on:
       - kafka
+
+  db:
+    image: postgres:15
+    container_name: sentinela-db
+    environment:
+      POSTGRES_PASSWORD: root
+    ports:
+      - "5432:5432"
+
+  dashboard-api:
+    build: ./services/dashboard_api
+    container_name: sentinela-dashboard-api
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+
+  dashboard-web:
+    build: ./services/dashboard_web
+    container_name: sentinela-dashboard-web
+    ports:
+      - "80:80"
+    depends_on:
+      - dashboard-api
 =======
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
