@@ -10,7 +10,7 @@ def start_simulator():
     
     while True:
         try:
-            producer = KafkaProducer(bootstrap_servers=['kafka:9092'])
+            producer = KafkaProducer(bootstrap_servers=['localhost:9092'])
         except NoBrokersAvailable:
             print("⏳ Aguardando Kafka (NoBrokersAvailable)... Aguarde uns 15 segundo")
             time.sleep(15)
