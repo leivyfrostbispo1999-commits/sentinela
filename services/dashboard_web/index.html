@@ -1,122 +1,374 @@
 <!DOCTYPE html>
-<<<<<<< HEAD
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SENTINELA</title>
+    <title>SENTINELA | Centro de Operações de Segurança</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        :root {
+            --bg: #03060d;
+            --bg-elevated: rgba(9, 16, 29, 0.82);
+            --panel: rgba(12, 21, 38, 0.74);
+            --panel-strong: rgba(16, 28, 48, 0.92);
+            --line: rgba(117, 211, 255, 0.16);
+            --line-strong: rgba(117, 211, 255, 0.34);
+            --text: #dbeafe;
+            --muted: #8ba3bc;
+            --cyan: #67e8f9;
+            --blue: #38bdf8;
+            --red: #ff3b4f;
+            --yellow: #facc15;
+            --green: #10f29b;
+            --shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background: #050507;
-            color: #e2e8f0;
-            margin: 0;
-            padding: 30px 40px;
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            margin: 0;
+            color: var(--text);
+            font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background:
+                linear-gradient(rgba(103, 232, 249, 0.025) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(103, 232, 249, 0.025) 1px, transparent 1px),
+                radial-gradient(circle at 18% 8%, rgba(56, 189, 248, 0.18), transparent 30%),
+                radial-gradient(circle at 78% 12%, rgba(16, 242, 155, 0.10), transparent 28%),
+                radial-gradient(circle at 50% 90%, rgba(250, 204, 21, 0.06), transparent 34%),
+                var(--bg);
+            background-size: 44px 44px, 44px 44px, auto, auto, auto, auto;
+            overflow-x: hidden;
         }
 
-        .title {
-            font-size: 3.8em;
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.035), transparent 18%),
+                repeating-linear-gradient(180deg, rgba(255,255,255,0.018) 0, rgba(255,255,255,0.018) 1px, transparent 1px, transparent 5px);
+            mix-blend-mode: screen;
+            opacity: 0.34;
+            z-index: 0;
+        }
+
+        body.event-flash::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background: radial-gradient(circle at top right, rgba(103, 232, 249, 0.09), transparent 34%);
+            animation: pageFlash 1200ms ease-out;
+            z-index: 10;
+        }
+
+        body.reduce-motion *,
+        body.reduce-motion *::before,
+        body.reduce-motion *::after {
+            animation-duration: 0.001ms !important;
+            animation-iteration-count: 1 !important;
+            scroll-behavior: auto !important;
+            transition-duration: 0.001ms !important;
+        }
+
+        body.reduce-motion.event-flash::after {
+            display: none;
+        }
+
+        .shell {
+            position: relative;
+            z-index: 1;
+            width: min(1580px, calc(100% - 40px));
+            margin: 0 auto;
+            padding: 28px 0 34px;
+        }
+
+        .topbar {
+            display: grid;
+            grid-template-columns: minmax(280px, 1fr) auto;
+            gap: 22px;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 22px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .brand {
+            min-width: 0;
+        }
+
+        .eyebrow {
+            color: var(--cyan);
+            font-family: "JetBrains Mono", monospace;
+            font-size: 0.78rem;
             font-weight: 700;
-            color: #67e8f9;
-            text-shadow: 0 0 40px #67e8f9;
-            margin-bottom: 15px;
-            display: flex;
-            align-items: center;
-            gap: 20px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
         }
 
-        .siren {
-            font-size: 2.8em;
-            animation: sirenPulse 1.4s infinite alternate;
+        h1 {
+            margin: 6px 0 8px;
+            color: #f8fbff;
+            font-size: clamp(2.3rem, 5vw, 5.1rem);
+            font-weight: 900;
+            line-height: 0.92;
+            text-transform: uppercase;
+            text-shadow: 0 0 38px rgba(103, 232, 249, 0.34);
         }
 
-        .status {
-            color: #4ade80;
-            font-size: 1.45em;
-            font-weight: 600;
-            margin-bottom: 40px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.98rem;
         }
 
-        .status::before {
-            content: '';
-            width: 16px;
-            height: 16px;
-            background: #4ade80;
-            border-radius: 50%;
-            box-shadow: 0 0 25px #4ade80;
-            animation: pulse 2s infinite;
-        }
-
-        .controls {
-            display: flex;
-            gap: 15px;
-            margin-bottom: 30px;
-        }
-
-        .controls input, .controls select {
-            background: #1e2937;
-            color: white;
-            border: 1px solid #67e8f9;
-            padding: 10px;
+        .system-status {
+            min-width: min(420px, 100%);
+            padding: 18px 20px;
+            border: 1px solid rgba(16, 242, 155, 0.32);
             border-radius: 8px;
-            min-width: 200px;
+            background: linear-gradient(145deg, rgba(16, 242, 155, 0.13), rgba(12, 21, 38, 0.88));
+            box-shadow: 0 0 38px rgba(16, 242, 155, 0.08);
         }
 
-        .cards {
+        .system-status.warning {
+            border-color: rgba(250, 204, 21, 0.42);
+            background: linear-gradient(145deg, rgba(250, 204, 21, 0.14), rgba(12, 21, 38, 0.9));
+            box-shadow: 0 0 38px rgba(250, 204, 21, 0.08);
+        }
+
+        .system-status.danger {
+            border-color: rgba(255, 59, 79, 0.48);
+            background: linear-gradient(145deg, rgba(255, 59, 79, 0.16), rgba(12, 21, 38, 0.92));
+            box-shadow: 0 0 42px rgba(255, 59, 79, 0.10);
+        }
+
+        .status-line {
             display: flex;
-            justify-content: center;
-            gap: 30px;
-            flex-wrap: wrap;
-            margin-bottom: 50px;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
         }
 
-        .card {
-            background: rgba(15, 23, 42, 0.9);
-            border-radius: 22px;
-            padding: 32px 50px;
-            text-align: center;
-            min-width: 300px;
-            box-shadow: 0 0 50px rgba(103, 232, 249, 0.3);
+        .status-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--green);
+            font-size: 0.95rem;
+            font-weight: 800;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
         }
 
-        .card h2 {
-            font-size: 5.5em;
+        .warning .status-label {
+            color: var(--yellow);
+        }
+
+        .danger .status-label {
+            color: var(--red);
+        }
+
+        .status-dot {
+            width: 11px;
+            height: 11px;
+            border-radius: 999px;
+            background: currentColor;
+            box-shadow: 0 0 20px currentColor;
+            animation: heartbeat 1.55s infinite;
+        }
+
+        .status-meta {
+            color: var(--muted);
+            font-family: "JetBrains Mono", monospace;
+            font-size: 0.78rem;
+            text-align: right;
+        }
+
+        .status-detail {
+            margin-top: 10px;
+            color: #b6cbe0;
+            font-size: 0.9rem;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(220px, 1fr));
+            gap: 18px;
+            margin-bottom: 18px;
+        }
+
+        .metric-card {
+            position: relative;
+            overflow: hidden;
+            min-height: 174px;
+            padding: 22px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background:
+                linear-gradient(150deg, rgba(255,255,255,0.06), transparent 34%),
+                var(--panel);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        .metric-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-top: 3px solid currentColor;
+            opacity: 0.88;
+            pointer-events: none;
+        }
+
+        .metric-card::after {
+            content: "";
+            position: absolute;
+            width: 180px;
+            height: 180px;
+            right: -80px;
+            top: -82px;
+            border-radius: 50%;
+            background: currentColor;
+            filter: blur(70px);
+            opacity: 0.13;
+            pointer-events: none;
+        }
+
+        .metric-card.critical {
+            color: var(--red);
+        }
+
+        .metric-card.attention {
+            color: var(--yellow);
+        }
+
+        .metric-card.safe {
+            color: var(--green);
+        }
+
+        .metric-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            color: #f2f7ff;
+        }
+
+        .metric-title {
+            margin: 0;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+        }
+
+        .metric-chip {
+            padding: 5px 8px;
+            border: 1px solid currentColor;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.04);
+            color: currentColor;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 0.72rem;
             font-weight: 700;
-            margin: 0 0 12px 0;
         }
 
-        .red h2 { color: #f87171; text-shadow: 0 0 35px #f87171; }
-        .amber h2 { color: #fbbf24; text-shadow: 0 0 35px #fbbf24; }
-        .cyan h2 { color: #67e8f9; text-shadow: 0 0 35px #67e8f9; }
-
-        .table-container {
-            width: 100%;
-            max-width: 1200px;
-            max-height: 520px;
-            overflow-y: auto;
-            border-radius: 18px;
-            background: rgba(15, 23, 42, 0.9);
-            box-shadow: 0 0 50px rgba(0, 0, 0, 0.7);
-            scrollbar-width: thin;
-            scrollbar-color: #67e8f9 #1e2937;
+        .metric-value {
+            margin: 18px 0 6px;
+            color: currentColor;
+            font-family: "JetBrains Mono", monospace;
+            font-size: clamp(3rem, 7vw, 5.4rem);
+            font-weight: 800;
+            line-height: 0.9;
+            text-shadow: 0 0 30px currentColor;
         }
 
-        .table-container::-webkit-scrollbar {
+        .metric-value.changed {
+            animation: numberPulse 760ms ease-out;
+        }
+
+        .metric-copy {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.88rem;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.28fr) minmax(380px, 0.72fr);
+            gap: 18px;
+        }
+
+        .panel {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background:
+                linear-gradient(150deg, rgba(103, 232, 249, 0.07), transparent 30%),
+                var(--bg-elevated);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 18px 20px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .panel-title {
+            margin: 0;
+            color: #f8fbff;
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .panel-subtitle {
+            margin: 4px 0 0;
+            color: var(--muted);
+            font-size: 0.84rem;
+        }
+
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+            color: var(--cyan);
+            font-family: "JetBrains Mono", monospace;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .live-badge span {
             width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--cyan);
+            box-shadow: 0 0 16px var(--cyan);
+            animation: heartbeat 1.45s infinite;
         }
 
-        .table-container::-webkit-scrollbar-thumb {
-            background: #67e8f9;
-            border-radius: 20px;
+        body.reduce-motion .live-badge span,
+        body.reduce-motion .status-dot {
+            animation: none !important;
+            opacity: 1;
+            transform: none;
+        }
+
+        .table-wrap {
+            max-height: 610px;
+            overflow: auto;
         }
 
         table {
@@ -124,294 +376,1012 @@
             border-collapse: collapse;
         }
 
-        th, td {
-            padding: 18px 26px;
-            text-align: left;
-        }
-
         th {
-            background: #0f172a;
-            color: #67e8f9;
             position: sticky;
             top: 0;
+            z-index: 2;
+            padding: 15px 18px;
+            border-bottom: 1px solid var(--line-strong);
+            background: rgba(5, 10, 20, 0.96);
+            color: var(--cyan);
+            font-family: "JetBrains Mono", monospace;
+            font-size: 0.74rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-align: left;
+            text-transform: uppercase;
         }
 
-        .threat { color: #f87171; font-weight: 600; }
-        .portscan { color: #fbbf24; font-weight: 600; }
-        .green { color: #4ade80; font-weight: 600; }
+        td {
+            padding: 15px 18px;
+            border-bottom: 1px solid rgba(117, 211, 255, 0.09);
+            color: #dbeafe;
+            font-size: 0.94rem;
+        }
+
+        tr {
+            transition: background 180ms ease, transform 180ms ease;
+        }
+
+        tbody tr:hover {
+            background: rgba(103, 232, 249, 0.08);
+        }
+
+        tr.new-row {
+            animation: rowFlash 1.1s ease-out;
+        }
+
+        .mono {
+            font-family: "JetBrains Mono", monospace;
+            font-weight: 700;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 132px;
+            justify-content: center;
+            padding: 7px 10px;
+            border: 1px solid currentColor;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.05);
+            font-size: 0.76rem;
+            font-weight: 900;
+            letter-spacing: 0.7px;
+            text-transform: uppercase;
+        }
+
+        .tag::before {
+            content: "";
+            width: 7px;
+            height: 7px;
+            border-radius: 999px;
+            background: currentColor;
+            box-shadow: 0 0 13px currentColor;
+        }
+
+        .tag-critical {
+            color: var(--red);
+            background: rgba(255, 59, 79, 0.12);
+        }
+
+        .tag-warning {
+            color: var(--yellow);
+            background: rgba(250, 204, 21, 0.12);
+        }
+
+        .tag-safe {
+            color: var(--green);
+            background: rgba(16, 242, 155, 0.12);
+        }
+
+        .risk {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 120px;
+            font-family: "JetBrains Mono", monospace;
+            font-weight: 800;
+        }
+
+        .risk-bar {
+            width: 74px;
+            height: 8px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.08);
+        }
+
+        .risk-fill {
+            display: block;
+            height: 100%;
+            width: var(--risk-width);
+            border-radius: inherit;
+            background: currentColor;
+            box-shadow: 0 0 14px currentColor;
+        }
+
+        .risk.critical {
+            color: var(--red);
+        }
+
+        .risk.warning {
+            color: var(--yellow);
+        }
+
+        .risk.safe {
+            color: var(--green);
+        }
+
+        .map-panel {
+            min-height: 610px;
+        }
+
+        .map-controls {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .control-button,
+        .motion-toggle {
+            min-height: 38px;
+            border: 1px solid rgba(103, 232, 249, 0.30);
+            border-radius: 7px;
+            background: rgba(103, 232, 249, 0.08);
+            color: var(--cyan);
+            font-family: "Inter", sans-serif;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+        }
+
+        .control-button {
+            padding: 0 14px;
+            cursor: pointer;
+            box-shadow: 0 0 18px rgba(103, 232, 249, 0.08);
+        }
+
+        .control-button:hover {
+            border-color: rgba(103, 232, 249, 0.58);
+            background: rgba(103, 232, 249, 0.13);
+        }
+
+        .motion-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 12px;
+            color: #b9d7ea;
+            cursor: pointer;
+        }
+
+        .motion-toggle input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--cyan);
+        }
+
+        .map-collapsed-note {
+            margin: 18px;
+            padding: 22px;
+            border: 1px dashed rgba(103, 232, 249, 0.28);
+            border-radius: 8px;
+            background: rgba(103, 232, 249, 0.045);
+            color: var(--muted);
+            font-size: 0.92rem;
+            line-height: 1.5;
+        }
+
+        .map-stage {
+            position: relative;
+            min-height: 416px;
+            margin: 18px;
+            overflow: hidden;
+            border: 1px solid rgba(117, 211, 255, 0.16);
+            border-radius: 8px;
+            background:
+                linear-gradient(rgba(103, 232, 249, 0.035) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(103, 232, 249, 0.035) 1px, transparent 1px),
+                radial-gradient(circle at center, rgba(56, 189, 248, 0.13), rgba(3, 6, 13, 0.92) 62%);
+            background-size: 32px 32px, 32px 32px, auto;
+        }
+
+        .map-stage[hidden],
+        .map-collapsed-note[hidden] {
+            display: none;
+        }
+
+        .world-map {
+            position: absolute;
+            inset: 7% 5%;
+            width: 90%;
+            height: 74%;
+            opacity: 0.48;
+            filter: drop-shadow(0 0 18px rgba(103, 232, 249, 0.25));
+        }
+
+        .world-map path {
+            fill: rgba(103, 232, 249, 0.13);
+            stroke: rgba(103, 232, 249, 0.42);
+            stroke-width: 1.3;
+        }
+
+        .map-sweep {
+            position: absolute;
+            inset: -20%;
+            background: conic-gradient(from 0deg, transparent, rgba(103, 232, 249, 0.16), transparent 24%);
+            animation: sweep 8s linear infinite;
+            opacity: 0.42;
+        }
+
+        .map-point {
+            position: absolute;
+            left: var(--x);
+            top: var(--y);
+            width: 34px;
+            height: 34px;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            transform: translate(-50%, -50%);
+            cursor: default;
+            color: var(--green);
+            isolation: isolate;
+        }
+
+        .point-core,
+        .point-aura,
+        .ping {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        .point-core {
+            width: 10px;
+            height: 10px;
+            z-index: 3;
+            background:
+                radial-gradient(circle at 35% 32%, rgba(255,255,255,0.92), currentColor 38%, currentColor 100%);
+            box-shadow:
+                0 0 5px currentColor,
+                0 0 12px currentColor;
+            animation: corePulse 2.4s ease-in-out infinite;
+        }
+
+        .point-aura {
+            width: 22px;
+            height: 22px;
+            z-index: 1;
+            background: currentColor;
+            filter: blur(9px);
+            opacity: 0.34;
+            animation: auraBreath 3.2s ease-in-out infinite;
+        }
+
+        .ping {
+            width: 16px;
+            height: 16px;
+            z-index: 2;
+            border: 1px solid currentColor;
+            box-shadow: 0 0 10px currentColor;
+            animation: ping 2.6s infinite;
+            opacity: 0;
+        }
+
+        .map-point::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 50%;
+            bottom: calc(100% + 13px);
+            width: max-content;
+            max-width: 250px;
+            padding: 9px 10px;
+            border: 1px solid rgba(117, 211, 255, 0.28);
+            border-radius: 6px;
+            background: rgba(4, 9, 18, 0.96);
+            color: #f8fbff;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 0.72rem;
+            line-height: 1.45;
+            white-space: pre-line;
+            opacity: 0;
+            pointer-events: none;
+            transform: translate(-50%, 8px);
+            transition: opacity 160ms ease, transform 160ms ease;
+            z-index: 5;
+        }
+
+        .map-point:hover::after {
+            opacity: 1;
+            transform: translate(-50%, 0);
+        }
+
+        .map-point.critical {
+            color: var(--red);
+            filter:
+                drop-shadow(0 0 7px rgba(255, 59, 79, 0.72))
+                drop-shadow(0 0 18px rgba(255, 59, 79, 0.38));
+        }
+
+        .map-point.critical .point-core {
+            width: 12px;
+            height: 12px;
+            box-shadow:
+                0 0 7px rgba(255, 59, 79, 0.82),
+                0 0 17px rgba(255, 59, 79, 0.46),
+                0 0 26px rgba(255, 59, 79, 0.24);
+        }
+
+        .map-point.critical .point-aura {
+            width: 28px;
+            height: 28px;
+            opacity: 0.42;
+            filter: blur(11px);
+        }
+
+        .map-point.critical .ping {
+            width: 18px;
+            height: 18px;
+            border-width: 1px;
+            animation-duration: 2.25s;
+        }
+
+        .map-point.warning {
+            color: var(--yellow);
+            filter:
+                drop-shadow(0 0 6px rgba(250, 204, 21, 0.58))
+                drop-shadow(0 0 14px rgba(250, 204, 21, 0.28));
+        }
+
+        .map-point.warning .point-core {
+            width: 12px;
+            height: 12px;
+            box-shadow:
+                0 0 6px rgba(250, 204, 21, 0.76),
+                0 0 15px rgba(250, 204, 21, 0.38),
+                0 0 22px rgba(250, 204, 21, 0.18);
+        }
+
+        .map-point.warning .point-aura {
+            width: 24px;
+            height: 24px;
+            opacity: 0.32;
+            filter: blur(10px);
+        }
+
+        .map-point.warning .ping {
+            animation-duration: 2.7s;
+        }
+
+        .map-point.safe {
+            color: var(--green);
+            filter:
+                drop-shadow(0 0 5px rgba(16, 242, 155, 0.46))
+                drop-shadow(0 0 12px rgba(16, 242, 155, 0.20));
+        }
+
+        .map-point.safe .point-core {
+            box-shadow:
+                0 0 5px rgba(16, 242, 155, 0.62),
+                0 0 13px rgba(16, 242, 155, 0.28),
+                0 0 20px rgba(16, 242, 155, 0.14);
+        }
+
+        .map-point.safe .point-aura {
+            opacity: 0.22;
+            filter: blur(8px);
+        }
+
+        .map-point.safe .ping {
+            border-width: 1px;
+            animation-duration: 3.1s;
+        }
+
+        .map-legend {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 0 18px 18px;
+        }
+
+        .legend-item {
+            padding: 12px;
+            border: 1px solid rgba(117, 211, 255, 0.13);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.035);
+        }
+
+        .legend-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 0.76rem;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            background: currentColor;
+            border: 1px solid rgba(255,255,255,0.22);
+            opacity: 1;
+        }
+
+        .legend-dot.critical {
+            color: var(--red);
+            background: var(--red);
+            box-shadow:
+                0 0 6px rgba(255, 59, 79, 0.68),
+                0 0 13px rgba(255, 59, 79, 0.26);
+        }
+
+        .legend-dot.warning {
+            color: var(--yellow);
+            background: var(--yellow);
+            box-shadow:
+                0 0 6px rgba(250, 204, 21, 0.62),
+                0 0 12px rgba(250, 204, 21, 0.22);
+        }
+
+        .legend-dot.safe {
+            color: var(--green);
+            background: var(--green);
+            box-shadow:
+                0 0 6px rgba(16, 242, 155, 0.56),
+                0 0 12px rgba(16, 242, 155, 0.20);
+        }
+
+        body.reduce-motion .map-sweep,
+        body.reduce-motion .ping,
+        body.reduce-motion .point-core,
+        body.reduce-motion .point-aura {
+            animation: none !important;
+        }
+
+        body.reduce-motion .ping {
+            opacity: 0 !important;
+        }
+
+        body.reduce-motion .point-core {
+            transform: translate(-50%, -50%) !important;
+            filter: none !important;
+        }
+
+        .legend-value {
+            margin-top: 8px;
+            color: #fff;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 1.45rem;
+            font-weight: 800;
+        }
+
+        .empty-state {
+            padding: 34px 20px;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        @keyframes heartbeat {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.42; transform: scale(0.78); }
+        }
+
+        @keyframes numberPulse {
+            0% { transform: scale(1); filter: brightness(1); }
+            42% { transform: scale(1.08); filter: brightness(1.45); }
+            100% { transform: scale(1); filter: brightness(1); }
+        }
+
+        @keyframes rowFlash {
+            0% { background: rgba(103, 232, 249, 0.26); }
+            100% { background: transparent; }
+        }
+
+        @keyframes pageFlash {
+            0% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+        @keyframes ping {
+            0% {
+                transform: translate(-50%, -50%) scale(0.5);
+                opacity: 0.34;
+            }
+            70% {
+                transform: translate(-50%, -50%) scale(1.75);
+                opacity: 0;
+            }
+            100% {
+                transform: translate(-50%, -50%) scale(1.75);
+                opacity: 0;
+            }
+        }
+
+        @keyframes corePulse {
+            0%, 100% {
+                transform: translate(-50%, -50%) scale(0.94);
+                filter: brightness(1);
+            }
+            50% {
+                transform: translate(-50%, -50%) scale(1.06);
+                filter: brightness(1.18);
+            }
+        }
+
+        @keyframes auraBreath {
+            0%, 100% {
+                transform: translate(-50%, -50%) scale(0.94);
+                opacity: 0.24;
+            }
+            50% {
+                transform: translate(-50%, -50%) scale(1.06);
+                opacity: 0.42;
+            }
+        }
+
+        @keyframes sweep {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 1120px) {
+            .topbar,
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .system-status {
+                min-width: 0;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .shell {
+                width: min(100% - 24px, 1580px);
+                padding-top: 18px;
+            }
+
+            .stats,
+            .map-legend {
+                grid-template-columns: 1fr;
+            }
+
+            .panel-header,
+            .status-line {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .map-controls {
+                justify-content: flex-start;
+            }
+
+            .status-meta {
+                text-align: left;
+            }
+
+            th,
+            td {
+                padding: 13px 12px;
+                font-size: 0.82rem;
+            }
+
+            .tag {
+                min-width: 112px;
+            }
+
+            .map-stage {
+                min-height: 330px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="title">
-        <span class="siren">🚨</span>
-        SENTINELA
-    </div>
-    <div class="status">
-        ● ONLINE - Sistema Ativo e Protegendo sua Rede
-    </div>
+    <main class="shell">
+        <header class="topbar">
+            <section class="brand" aria-label="Identidade do sistema">
+                <div class="eyebrow">Centro de Operações de Segurança</div>
+                <h1>SENTINELA</h1>
+                <p class="subtitle">Monitoramento de ameaças, atividades suspeitas e tráfego seguro em tempo real.</p>
+            </section>
 
-    <div class="controls">
-        <input type="text" id="searchInput" placeholder="Buscar por IP ou Status">
-        <select id="filterType">
-            <option value="">Todos os Tipos</option>
-            <option value="BRUTE FORCE">Brute Force</option>
-            <option value="PORT SCAN">Port Scan</option>
-            <option value="ATAQUE SSH">Ataque SSH</option>
-            <option value="TRÁFEGO NORMAL">Tráfego Normal</option>
-        </select>
-    </div>
-
-    <div class="cards">
-        <div class="card red">
-            <h2>139</h2>
-            <p>AMEAÇAS NEUTRALIZADAS</p>
-        </div>
-        <div class="card amber">
-            <h2>172</h2>
-            <p>ATIVIDADE SUSPEITA</p>
-        </div>
-        <div class="card cyan">
-            <h2>122</h2>
-            <p>TRÁFEGO CRIPTOGRAFADO</p>
-        </div>
-    </div>
-
-    <div class="table-container">
-        <table id="alertTable">
-            <tr>
-                <th>DATA/HORA</th>
-                <th>IP DE ORIGEM</th>
-                <th>STATUS</th>
-                <th>NÍVEL DE AMEAÇA</th>
-            </tr>
-        </table>
-    </div>
-
-    <script>
-        const searchInput = document.getElementById('searchInput');
-        const filterType = document.getElementById('filterType');
-
-        function filterTable() {
-            const searchTerm = searchInput.value.toLowerCase();
-            const selectedType = filterType.value.toLowerCase();
-            const rows = document.querySelectorAll('#alertTable tr');
-
-            rows.forEach((row, index) => {
-                if (index === 0) return;
-                const cells = row.getElementsByTagName('td');
-                if (cells.length === 0) return;
-
-                const ip = cells[1].textContent.toLowerCase();
-                const status = cells[2].textContent.toLowerCase();
-
-                const matchesSearch = ip.includes(searchTerm) || status.includes(searchTerm);
-                const matchesType = !selectedType || status.includes(selectedType);
-
-                row.style.display = (matchesSearch && matchesType) ? '' : 'none';
-            });
-        }
-
-        searchInput.addEventListener('input', filterTable);
-        filterType.addEventListener('change', filterTable);
-
-        setInterval(() => {
-            const table = document.getElementById('alertTable');
-            const row = document.createElement('tr');
-            const types = [
-                {text: "BRUTE FORCE", class: "threat"},
-                {text: "PORT SCAN", class: "portscan"},
-                {text: "ATAQUE SSH", class: "threat"},
-                {text: "TRÁFEGO NORMAL", class: "green"}
-            ];
-            const type = types[Math.floor(Math.random() * types.length)];
-
-            row.innerHTML = `
-                <td>${new Date().toLocaleString('pt-BR')}</td>
-                <td>192.168.1.${Math.floor(Math.random()*255)}</td>
-                <td class="${type.class}">${type.text}</td>
-                <td>${Math.floor(Math.random()*90 + 10)}%</td>
-            `;
-            table.appendChild(row);
-
-            if (table.rows.length > 20) table.deleteRow(1);
-        }, 1100);
-    </script>
-</body>
-</html>
-=======
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SENTINELA IDS | Tactical Command Center</title>
-    <link rel="stylesheet" href="https://cloudflare.com">
-    <link href="https://googleapis.com" rel="stylesheet">
-    <style>
-        :root {
-            --bg-deep: #020408;
-            --glass-bg: rgba(13, 17, 23, 0.7);
-            --border-glow: rgba(56, 139, 253, 0.15);
-            --critical-red: #ff3333;
-            --warning-gold: #ffcc00;
-            --safe-green: #00f291;
-            --text-main: #c9d1d9;
-            --text-dim: #8b949e;
-        }
-
-        * { box-sizing: border-box; transition: all 0.2s ease-in-out; }
-        
-        body { 
-            background: radial-gradient(circle at top right, #0d1117, var(--bg-deep));
-            color: var(--text-main); 
-            font-family: 'Inter', sans-serif; 
-            margin: 0; padding: 30px; 
-            min-height: 100vh;
-            overflow-x: hidden;
-        }
-
-        /* Scanline effect para look militar */
-        body::before {
-            content: " "; display: block; position: fixed; top: 0; left: 0; bottom: 0; right: 0;
-            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
-            z-index: 9999; pointer-events: none; background-size: 100% 4px, 3px 100%;
-        }
-
-        .container { max-width: 1400px; margin: 0 auto; }
-
-        header { 
-            display: flex; justify-content: space-between; align-items: flex-end;
-            margin-bottom: 40px; border-bottom: 1px solid rgba(255,255,255,0.05);
-            padding-bottom: 20px;
-        }
-
-        .brand h1 { 
-            font-size: 2rem; font-weight: 800; letter-spacing: -2px; margin: 0; color: #fff;
-            text-transform: uppercase; display: flex; align-items: center;
-        }
-        .brand h1 i { color: var(--critical-red); margin-right: 15px; filter: drop-shadow(0 0 8px var(--critical-red)); }
-        
-        .status-badge { 
-            font-family: 'JetBrains Mono'; font-size: 12px; color: var(--safe-green);
-            background: rgba(0, 242, 145, 0.1); padding: 5px 12px; border-radius: 4px;
-            display: flex; align-items: center; gap: 8px; border: 1px solid rgba(0, 242, 145, 0.2);
-        }
-        .pulse-dot { height: 8px; width: 8px; background: var(--safe-green); border-radius: 50%; animation: pulse 1.5s infinite; }
-
-        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 25px; margin-bottom: 40px; }
-
-        .card { 
-            background: var(--glass-bg); backdrop-filter: blur(10px);
-            border: 1px solid var(--border-glow); border-radius: 12px;
-            padding: 25px; position: relative; overflow: hidden;
-        }
-        .card::after { content: ""; position: absolute; top: 0; left: 0; width: 4px; height: 100%; }
-        
-        .card.critical::after { background: var(--critical-red); box-shadow: 0 0 15px var(--critical-red); }
-        .card.warning::after { background: var(--warning-gold); box-shadow: 0 0 15px var(--warning-gold); }
-        .card.safe::after { background: var(--safe-green); box-shadow: 0 0 15px var(--safe-green); }
-
-        .card h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: var(--text-dim); margin: 0 0 10px 0; }
-        .card .value { font-family: 'JetBrains Mono'; font-size: 42px; font-weight: 700; color: #fff; }
-
-        .table-wrap { 
-            background: var(--glass-bg); border: 1px solid var(--border-glow); 
-            border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.4);
-        }
-
-        table { width: 100%; border-collapse: collapse; }
-        th { 
-            background: rgba(255,255,255,0.02); padding: 15px 20px; text-align: left;
-            font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-dim);
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-        }
-        td { padding: 15px 20px; font-family: 'JetBrains Mono'; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.02); }
-        
-        .tag { 
-            padding: 4px 10px; border-radius: 3px; font-size: 10px; font-weight: 700; 
-            text-transform: uppercase; border: 1px solid transparent;
-        }
-        .tag-red { background: rgba(255, 51, 51, 0.1); color: var(--critical-red); border-color: rgba(255, 51, 51, 0.2); }
-        .tag-gold { background: rgba(255, 204, 0, 0.1); color: var(--warning-gold); border-color: rgba(255, 204, 0, 0.2); }
-        .tag-green { background: rgba(0, 242, 145, 0.1); color: var(--safe-green); border-color: rgba(0, 242, 145, 0.2); }
-
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <header>
-            <div class="brand">
-                <h1><i class="fas fa-microchip"></i> SENTINELA <span style="font-weight: 300; opacity: 0.5;">CORE_IDS</span></h1>
-            </div>
-            <div class="status-badge">
-                <div class="pulse-dot"></div> ACTIVE_MONITORING: 100% OPERATIONAL
-            </div>
+            <aside class="system-status" id="systemStatus" aria-live="polite">
+                <div class="status-line">
+                    <div class="status-label">
+                        <span class="status-dot"></span>
+                        <span id="systemStatusText">SISTEMA ESTÁVEL</span>
+                    </div>
+                    <div class="status-meta" id="lastUpdate">Aguardando telemetria</div>
+                </div>
+                <div class="status-detail" id="systemStatusDetail">Pipeline ativo. Nenhum evento crítico recente.</div>
+            </aside>
         </header>
 
-        <div class="stats-grid">
-            <div class="card critical">
-                <h3><i class="fas fa-skull-crossbones"></i> Threat Neutralized</h3>
-                <div class="value" id="c-red">0</div>
-            </div>
-            <div class="card warning">
-                <h3><i class="fas fa-search-dollar"></i> Suspicious Activity</h3>
-                <div class="value" id="c-yellow">0</div>
-            </div>
-            <div class="card safe">
-                <h3><i class="fas fa-shield-check"></i> Encrypted Traffic</h3>
-                <div class="value" id="c-green">0</div>
-            </div>
-        </div>
+        <section class="stats" aria-label="Indicadores principais">
+            <article class="metric-card critical">
+                <div class="metric-head">
+                    <h2 class="metric-title">AMEAÇAS NEUTRALIZADAS</h2>
+                    <span class="metric-chip">CRÍTICO</span>
+                </div>
+                <div class="metric-value" id="neutralized">0</div>
+                <p class="metric-copy">BRUTE FORCE e PORT SCAN detectados.</p>
+            </article>
 
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>T-STAMP</th>
-                        <th>SOURCE_IP</th>
-                        <th>PROTOCOL_STATUS</th>
-                        <th>THREAT_LVL</th>
-                    </tr>
-                </thead>
-                <tbody id="logs"></tbody>
-            </table>
-        </div>
-    </div>
+            <article class="metric-card attention">
+                <div class="metric-head">
+                    <h2 class="metric-title">ATIVIDADE SUSPEITA</h2>
+                    <span class="metric-chip">ATENÇÃO</span>
+                </div>
+                <div class="metric-value" id="suspicious">0</div>
+                <p class="metric-copy">Eventos intermediários que exigem observação.</p>
+            </article>
+
+            <article class="metric-card safe">
+                <div class="metric-head">
+                    <h2 class="metric-title">TRÁFEGO NORMAL</h2>
+                    <span class="metric-chip">SEGURO</span>
+                </div>
+                <div class="metric-value" id="normal">0</div>
+                <p class="metric-copy">Fluxos classificados como comportamento esperado.</p>
+            </article>
+        </section>
+
+        <section class="main-grid">
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">Eventos Recentes</h2>
+                        <p class="panel-subtitle">Últimos registros recebidos de http://localhost:5000/alertas</p>
+                    </div>
+                    <div class="live-badge"><span></span> Atualização ao vivo</div>
+                </div>
+
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Data/Hora</th>
+                                <th>IP de Origem</th>
+                                <th>Status</th>
+                                <th>Nível de Ameaça</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logs">
+                            <tr>
+                                <td colspan="4" class="empty-state">Carregando eventos do SENTINELA...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="panel map-panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title">Origem dos Eventos</h2>
+                        <p class="panel-subtitle">Mapa visual local com geolocalização simulada no frontend.</p>
+                    </div>
+                    <div class="map-controls">
+                        <button class="control-button" id="toggleMapButton" type="button" aria-expanded="false" aria-controls="mapStage">
+                            Mostrar mapa de atividade
+                        </button>
+                        <label class="motion-toggle">
+                            <input type="checkbox" id="reduceMotionToggle">
+                            Reduzir animações
+                        </label>
+                    </div>
+                </div>
+
+                <div class="map-collapsed-note" id="mapCollapsedNote">
+                    Mapa de atividade oculto por padrão para reduzir estímulos visuais. Use o botão acima para exibir a visualização geográfica simulada dos eventos.
+                </div>
+
+                <div class="map-stage" id="mapStage" aria-label="Mapa visual de eventos globais" hidden>
+                    <div class="map-sweep"></div>
+                    <svg class="world-map" viewBox="0 0 900 430" aria-hidden="true">
+                        <path d="M105 151l38-24 56 8 31 32-19 31-58 8-45-18-28-20z"></path>
+                        <path d="M205 236l51-8 38 34-13 55-37 64-35-40-24-51z"></path>
+                        <path d="M368 122l66-35 80 12 43 41-23 47-76 18-81-22-35-34z"></path>
+                        <path d="M456 235l42-19 55 19 22 55-29 70-43 39-42-57-24-56z"></path>
+                        <path d="M585 132l83-39 107 19 60 48-47 43-94 18-92-20-48-40z"></path>
+                        <path d="M685 247l53-19 71 27 24 43-44 29-75-4-47-35z"></path>
+                        <path d="M724 352l58-3 46 25-24 32-66 4-42-22z"></path>
+                    </svg>
+                    <div id="mapPoints"></div>
+                </div>
+
+                <div class="map-legend">
+                    <div class="legend-item" style="color: var(--red);">
+                        <div class="legend-label"><span class="legend-dot critical"></span> Ameaças</div>
+                        <div class="legend-value" id="mapCritical">0</div>
+                    </div>
+                    <div class="legend-item" style="color: var(--yellow);">
+                        <div class="legend-label"><span class="legend-dot warning"></span> Suspeitos</div>
+                        <div class="legend-value" id="mapWarning">0</div>
+                    </div>
+                    <div class="legend-item" style="color: var(--green);">
+                        <div class="legend-label"><span class="legend-dot safe"></span> Normais</div>
+                        <div class="legend-value" id="mapSafe">0</div>
+                    </div>
+                </div>
+            </section>
+        </section>
+    </main>
 
     <script>
-        async function updateSOC() {
-            try {
-                const res = await fetch('http://localhost:5000/alertas');
-                const data = await res.json();
-                const logs = document.getElementById('logs');
-                logs.innerHTML = '';
+        const API_URL = 'http://localhost:5000/alertas';
+        const TABLE_LIMIT = 28;
+        const MAP_LIMIT = 34;
 
-                let r=0, y=0, g=0;
+        let lastEventKey = '';
+        let isMapVisible = false;
+        const previousCounters = {
+            neutralized: 0,
+            suspicious: 0,
+            normal: 0
+        };
 
-                data.forEach(item => {
-                    let tag = 'tag-green';
-                    if(item.risco >= 90) { tag = 'tag-red'; r++; }
-                    else if(item.risco >= 50) { tag = 'tag-gold'; y++; }
-                    else g++;
+        const elements = {
+            body: document.body,
+            logs: document.getElementById('logs'),
+            mapPoints: document.getElementById('mapPoints'),
+            neutralized: document.getElementById('neutralized'),
+            suspicious: document.getElementById('suspicious'),
+            normal: document.getElementById('normal'),
+            mapCritical: document.getElementById('mapCritical'),
+            mapWarning: document.getElementById('mapWarning'),
+            mapSafe: document.getElementById('mapSafe'),
+            mapStage: document.getElementById('mapStage'),
+            mapCollapsedNote: document.getElementById('mapCollapsedNote'),
+            toggleMapButton: document.getElementById('toggleMapButton'),
+            reduceMotionToggle: document.getElementById('reduceMotionToggle'),
+            systemStatus: document.getElementById('systemStatus'),
+            systemStatusText: document.getElementById('systemStatusText'),
+            systemStatusDetail: document.getElementById('systemStatusDetail'),
+            lastUpdate: document.getElementById('lastUpdate')
+        };
 
-                    logs.innerHTML += `
-                        <tr>
-                            <td style="color:var(--text-dim)">${item.ts}</td>
-                            <td style="color:#fff; font-weight:700">${item.ip}</td>
-                            <td><span class="tag ${tag}">${item.status}</span></td>
-                            <td style="font-weight:700; color: ${item.risco >= 90 ? 'var(--critical-red)' : 'var(--text-main)'}">${item.risco}%</td>
-                        </tr>
-                    `;
-                });
-
-                document.getElementById('c-red').innerText = r;
-                document.getElementById('c-yellow').innerText = y;
-                document.getElementById('c-green').innerText = g;
-            } catch (e) { console.log("Reconnecting to Command Center..."); }
+        function setMapVisibility(visible) {
+            isMapVisible = visible;
+            elements.mapStage.hidden = !visible;
+            elements.mapCollapsedNote.hidden = visible;
+            elements.toggleMapButton.textContent = visible ? 'Ocultar mapa de atividade' : 'Mostrar mapa de atividade';
+            elements.toggleMapButton.setAttribute('aria-expanded', String(visible));
         }
-        setInterval(updateSOC, 500);
-        updateSOC();
+
+        function setReducedMotion(enabled) {
+            elements.body.classList.toggle('reduce-motion', enabled);
+            elements.reduceMotionToggle.checked = enabled;
+            localStorage.setItem('sentinelaReduceMotion', enabled ? '1' : '0');
+        }
+
+        function escapeHTML(value) {
+            return String(value ?? '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            }[char]));
+        }
+
+        function normalizeStatus(status) {
+            return String(status || '').toUpperCase();
+        }
+
+        function classifyAlert(alert) {
+            const risco = Number.parseInt(alert.risco, 10) || 0;
+            const status = normalizeStatus(alert.status);
+
+            if (status.includes('TRÁFEGO NORMAL') || status.includes('TRAFEGO NORMAL')) {
+                return { level: 'safe', tagClass: 'tag-safe', riskClass: 'safe', group: 'normal' };
+            }
+
+            if (status.includes('ATIVIDADE SUSPEITA') || status.includes('LOGIN SUSPEITO')) {
+                return { level: 'warning', tagClass: 'tag-warning', riskClass: 'warning', group: 'suspicious' };
+            }
+
+            if (status.includes('BRUTE FORCE') || status.includes('PORT SCAN') || risco >= 80) {
+                return { level: 'critical', tagClass: 'tag-critical', riskClass: 'critical', group: 'neutralized' };
+            }
+
+            if (risco >= 60) {
+                return { level: 'warning', tagClass: 'tag-warning', riskClass: 'warning', group: 'suspicious' };
+            }
+
+            return { level: 'safe', tagClass: 'tag-safe', riskClass: 'safe', group: 'normal' };
+        }
+
+        function eventKey(alert) {
+            return `${alert.ts || ''}|${alert.ip || ''}|${alert.status || ''}|${alert.risco || ''}`;
+        }
+
+        function pulseIfChanged(id, value) {
+            const element = elements[id];
+            element.textContent = value;
+
+            if (previousCounters[id] !== value) {
+                element.classList.remove('changed');
+                void element.offsetWidth;
+                element.classList.add('changed');
+                previousCounters[id] = value;
+            }
+        }
+
+        function triggerNewEventFlash(data) {
+            if (elements.body.classList.contains('reduce-motion')) return;
+            if (!data.length) return;
+
+            const currentKey = eventKey(data[0]);
+            if (lastEventKey && currentKey !== lastEventKey) {
+                elements.body.classList.remove('event-flash');
+                void elements.body.offsetWidth;
+                elements.body.classList.add('event-flash');
+            }
+            lastEventKey = currentKey;
+        }
+
+        function updateGlobalStatus(data) {
+            const recent = data.slice(0, 10);
+            const hasCritical = recent.some(alert => classifyAlert(alert).level === 'critical');
+            const hasWarning = recent.some(alert => classifyAlert(alert).level === 'warning');
+
+            elements.systemStatus.className = 'system-status';
+
+            if (hasCritical) {
+                elements.systemStatus.classList.add('danger');
+                elements.systemStatusText.textContent = 'ATAQUE EM ANDAMENTO';
+                elements.systemStatusDetail.textContent = 'Eventos críticos foram detectados nos alertas mais recentes.';
+                return;
+            }
+
+            if (hasWarning) {
+                elements.systemStatus.classList.add('warning');
+                elements.systemStatusText.textContent = 'ATIVIDADE SUSPEITA DETECTADA';
+                elements.systemStatusDetail.textContent = 'Há eventos intermediários exigindo atenção operacional.';
+                return;
+            }
+
+            elements.systemStatusText.textContent = 'SISTEMA ESTÁVEL';
+            elements.systemStatusDetail.textContent = 'Pipeline ativo. Nenhum evento crítico recente.';
+        }
+
+        function updateCounters(data) {
+            const counters = data.reduce((acc, alert) => {
+                const classification = classifyAlert(alert);
+                acc[classification.group] += 1;
+                return acc;
+            }, { neutralized: 0, suspicious: 0, normal: 0 });
+
+            pulseIfChanged('neutralized', counters.neutralized);
+            pulseIfChanged('suspicious', counters.suspicious);
+            pulseIfChanged('normal', counters.normal);
+
+            elements.mapCritical.textContent = counters.neutralized;
+            elements.mapWarning.textContent = counters.suspicious;
+            elements.mapSafe.textContent = counters.normal;
+        }
+
+        function renderTable(data) {
+            if (!data.length) {
+                elements.logs.innerHTML = '<tr><td colspan="4" class="empty-state">Nenhum evento recebido até o momento.</td></tr>';
+                return;
+            }
+
+            const latestKey = eventKey(data[0]);
+            elements.logs.innerHTML = data.slice(0, TABLE_LIMIT).map(alert => {
+                const risco = Number.parseInt(alert.risco, 10) || 0;
+                const classification = classifyAlert(alert);
+                const isLatest = eventKey(alert) === latestKey ? ' class="new-row"' : '';
+                const safeRisk = Math.max(0, Math.min(100, risco));
+
+                return `
+                    <tr${isLatest}>
+                        <td class="mono">${escapeHTML(alert.ts)}</td>
+                        <td class="mono">${escapeHTML(alert.ip)}</td>
+                        <td><span class="tag ${classification.tagClass}">${escapeHTML(alert.status)}</span></td>
+                        <td>
+                            <div class="risk ${classification.riskClass}">
+                                <span>${safeRisk}%</span>
+                                <span class="risk-bar"><span class="risk-fill" style="--risk-width: ${safeRisk}%;"></span></span>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function hashIP(ip) {
+            return String(ip || '').split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+        }
+
+        function simulatedCoordinates(ip, index) {
+            const hash = hashIP(ip) + index * 17;
+            const privateRanges = [
+                { test: /^10\./, x: 29, y: 40 },
+                { test: /^172\.(1[6-9]|2[0-9]|3[0-1])\./, x: 47, y: 48 },
+                { test: /^192\.168\./, x: 18, y: 38 }
+            ];
+
+            const privateMatch = privateRanges.find(range => range.test.test(String(ip || '')));
+            if (privateMatch) {
+                // Geolocalização demonstrativa: IPs privados são posicionados em regiões simuladas no frontend.
+                return {
+                    x: privateMatch.x + (hash % 12) - 6,
+                    y: privateMatch.y + (hash % 10) - 5
+                };
+            }
+
+            const regions = [
+                { x: 22, y: 35 },
+                { x: 36, y: 64 },
+                { x: 51, y: 35 },
+                { x: 62, y: 58 },
+                { x: 75, y: 39 },
+                { x: 81, y: 65 }
+            ];
+            const region = regions[hash % regions.length];
+
+            return {
+                x: region.x + (hash % 10) - 5,
+                y: region.y + (hash % 8) - 4
+            };
+        }
+
+        function renderMap(data) {
+            if (!isMapVisible) {
+                elements.mapPoints.innerHTML = '';
+                return;
+            }
+
+            elements.mapPoints.innerHTML = data.slice(0, MAP_LIMIT).map((alert, index) => {
+                const risco = Number.parseInt(alert.risco, 10) || 0;
+                const classification = classifyAlert(alert);
+                const point = simulatedCoordinates(alert.ip, index);
+                const tooltip = `IP: ${alert.ip || 'N/D'}\nStatus: ${alert.status || 'N/D'}\nRisco: ${risco}%`;
+
+                return `
+                    <button
+                        class="map-point ${classification.level}"
+                        style="--x: ${point.x}%; --y: ${point.y}%;"
+                        data-tooltip="${escapeHTML(tooltip)}"
+                        aria-label="${escapeHTML(tooltip)}">
+                        <span class="point-aura"></span>
+                        <span class="ping"></span>
+                        <span class="point-core"></span>
+                    </button>
+                `;
+            }).join('');
+        }
+
+        async function updateDashboard() {
+            try {
+                const response = await fetch(API_URL, { cache: 'no-store' });
+                if (!response.ok) throw new Error(`API indisponível: ${response.status}`);
+
+                const data = await response.json();
+                const alerts = Array.isArray(data) ? data : [];
+
+                triggerNewEventFlash(alerts);
+                updateCounters(alerts);
+                updateGlobalStatus(alerts);
+                renderTable(alerts);
+                renderMap(alerts);
+
+                elements.lastUpdate.textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
+            } catch (error) {
+                elements.systemStatus.className = 'system-status warning';
+                elements.systemStatusText.textContent = 'API EM VERIFICAÇÃO';
+                elements.systemStatusDetail.textContent = 'Aguardando resposta de http://localhost:5000/alertas.';
+                elements.lastUpdate.textContent = 'Sem conexão recente';
+            }
+        }
+
+        elements.toggleMapButton.addEventListener('click', () => {
+            setMapVisibility(!isMapVisible);
+            if (isMapVisible) updateDashboard();
+        });
+
+        elements.reduceMotionToggle.addEventListener('change', event => {
+            setReducedMotion(event.target.checked);
+        });
+
+        setMapVisibility(false);
+        setReducedMotion(localStorage.getItem('sentinelaReduceMotion') === '1');
+
+        updateDashboard();
+        setInterval(updateDashboard, 1000);
     </script>
 </body>
 </html>
->>>>>>> f33ed383d8e88d290a27dd7885af588db7e1ce40
