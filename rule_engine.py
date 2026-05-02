@@ -9,16 +9,8 @@ def start_engine():
     while True:
         try:
             # Consome dados brutos (ex: 'telemetry') e produz alertas ('alerts')
-            consumer = KafkaConsumer(
-                'telemetry',
-                bootstrap_servers=['localhost:9092'],
-                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-                group_id='sentinela-engine-group'
-            )
-            producer = KafkaProducer(
-                bootstrap_servers=['localhost:9092'],
-                value_serializer=lambda v: json.dumps(v).encode('utf-8')
-            )
+            consumer = KafkaConsumer('telemetry', bootstrap_servers=['kafka:9092'], value_deserializer=lambda m: json.loads(m.decode('utf-8')), group_id='sentinela-engine-group')
+            producer = KafkaProducer(bootstrap_servers=['kafka:9092'], value_serializer=lambda v: json.dumps(v).encode('utf-8'))
             print("✅ Motor de Regras conectado ao Kafka!")
 
             for message in consumer:

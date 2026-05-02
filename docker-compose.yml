@@ -1,7 +1,7 @@
 services:
   kafka:
 <<<<<<< HEAD
-    image: confluentinc/cp-kafka:7.6.0
+    image: confluentinc/cp-kafka:7.5.0
 =======
     image: confluentinc/cp-kafka:7.5.0
 >>>>>>> f33ed383d8e88d290a27dd7885af588db7e1ce40

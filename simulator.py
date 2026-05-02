@@ -10,12 +10,7 @@ def start_simulator():
     
     while True:
         try:
-            producer = KafkaProducer(
-                bootstrap_servers=['localhost:9092'],
-                value_serializer=lambda v: json.dumps(v).encode('utf-8')
-            )
-            print("✅ Simulador conectado ao Kafka!")
-            break
+            producer = KafkaProducer(bootstrap_servers=['kafka:9092'])
         except NoBrokersAvailable:
             print("⏳ Aguardando Kafka (NoBrokersAvailable)... Aguarde uns 15 segundo")
             time.sleep(15)
