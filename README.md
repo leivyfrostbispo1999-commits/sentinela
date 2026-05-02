@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # SENTINELA CORE IDS
 
 Sistema de Detecção e Resposta a Intrusões (IDS) moderno, event-driven, construído com Docker, Kafka KRaft e Python.
@@ -67,3 +67,50 @@ Para auditoria técnica dos tópicos Kafka:
 ---
 *Projeto desenvolvido com foco em padrões de engenharia de segurança e escalabilidade horizontal.*
 
+
+log_collector → Kafka → rule_engine → PostgreSQL → dashboard_api → dashboard_web
+
+---
+
+## 🛠️ Tecnologias
+
+- Python 3.11  
+- Apache Kafka  
+- PostgreSQL  
+- Docker  
+- Flask  
+- HTML, CSS e JavaScript  
+
+---
+
+## 🚀 Como executar
+
+```powershell
+cd D:\sentinela
+.\INICIAR-SENTINELA.bat
+
+
+🌐 Acessos
+Dashboard: http://localhost:8080
+API: http://localhost:5000/alertas
+
+📊 Exemplo de saída
+{
+  "ip": "192.168.1.45",
+  "status": "PORT SCAN",
+  "risco": 92
+}
+
+📌 Status
+
+✔ Pipeline funcionando
+✔ Kafka + API + Dashboard
+✔ Detecção em tempo real
+
+👨‍💻 Autor
+
+Leivy Bispo
+
+
+
+---
