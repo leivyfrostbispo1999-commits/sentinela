@@ -22,6 +22,12 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
 
+  alert-sink:
+    build: ./services/alert-sink
+    container_name: sentinela-alert-sink
+    depends_on:
+      - kafka
+
   simulator:
     build: ./services/simulator
     container_name: sentinela-simulator
