@@ -66,4 +66,4 @@ Para auditoria técnica dos tópicos Kafka:
 
 ---
 *Projeto desenvolvido com foco em padrões de engenharia de segurança e escalabilidade horizontal.*
->>>>>>> f33ed383d8e88d290a27dd7885af588db7e1ce40
+
