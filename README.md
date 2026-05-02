@@ -90,24 +90,24 @@ cd D:\sentinela
 .\INICIAR-SENTINELA.bat
 
 
-🌐 Acessos
+##🌐 Acessos
 Dashboard: http://localhost:8080
 API: http://localhost:5000/alertas
 
-📊 Exemplo de saída
+##📊 Exemplo de saída
 {
   "ip": "192.168.1.45",
   "status": "PORT SCAN",
   "risco": 92
 }
 
-📌 Status
+##📌 Status
 
 ✔ Pipeline funcionando
 ✔ Kafka + API + Dashboard
 ✔ Detecção em tempo real
 
-👨‍💻 Autor
+##👨‍💻 Autor
 
 Leivy Bispo
 
