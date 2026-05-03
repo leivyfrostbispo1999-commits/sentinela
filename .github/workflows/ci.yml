@@ -1,0 +1,43 @@
+name: Sentinela CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install -r services/rule_engine/requirements.txt
+          python -m pip install -r services/dashboard_api/requirements.txt
+          python -m pip install -r services/log_collector/requirements.txt
+          python -m pip install -r services/simulator/requirements.txt
+          python -m pip install -r services/alert-sink/requirements.txt
+
+      - name: Compile Python services
+        run: |
+          python -m py_compile services/log_collector/main.py
+          python -m py_compile services/rule_engine/main.py
+          python -m py_compile services/alert-sink/main.py
+          python -m py_compile services/dashboard_api/main.py
+          python -m py_compile services/simulator/main.py
+
+      - name: Run tests
+        env:
+          REDIS_STATE_ENABLED: "false"
+          SENTINELA_API_TOKEN: sentinela-demo-token
+          SENTINELA_JWT_SECRET: ci-jwt-secret
+        run: pytest -q

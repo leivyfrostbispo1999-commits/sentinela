@@ -55,6 +55,24 @@ services:
     mem_limit: 512m
     cpus: "0.50"
 
+  redis:
+    image: redis:7-alpine
+    container_name: sentinela-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 5s
+    networks:
+      - sentinela-net
+    mem_limit: 128m
+    cpus: "0.20"
+
   log_collector:
     build: ./services/log_collector
     container_name: sentinela-log-collector
@@ -95,9 +113,16 @@ services:
       ALERTS_TOPIC: ${ALERTS_TOPIC:-security_alerts}
       ENABLE_BLOCK: ${ENABLE_BLOCK:-false}
       CORRELATION_WINDOW_SECONDS: ${CORRELATION_WINDOW_SECONDS:-300}
+      ALERT_DEDUP_WINDOW_SECONDS: ${ALERT_DEDUP_WINDOW_SECONDS:-60}
+      ALERT_RATE_LIMIT_WINDOW_SECONDS: ${ALERT_RATE_LIMIT_WINDOW_SECONDS:-60}
+      ALERT_AGGREGATION_WINDOW_SECONDS: ${ALERT_AGGREGATION_WINDOW_SECONDS:-120}
       RULES_PATH: ${RULES_PATH:-rules.yaml}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_STATE_ENABLED: ${REDIS_STATE_ENABLED:-true}
     depends_on:
       kafka:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - sentinela-net
@@ -139,6 +164,8 @@ services:
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-root}
       SENTINELA_API_TOKEN: ${SENTINELA_API_TOKEN:-sentinela-demo-token}
+      SENTINELA_JWT_SECRET: ${SENTINELA_JWT_SECRET:-sentinela-demo-jwt-secret}
+      SENTINELA_JWT_TTL_SECONDS: ${SENTINELA_JWT_TTL_SECONDS:-3600}
     depends_on:
       db:
         condition: service_healthy
@@ -166,6 +193,32 @@ services:
       - sentinela-net
     mem_limit: 128m
     cpus: "0.20"
+
+  kafka-broker-2:
+    image: confluentinc/cp-kafka:7.6.0
+    profiles: ["kafka-lab"]
+    container_name: sentinela-kafka-broker-2
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-broker-2:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - sentinela-net
+    mem_limit: 1g
+    cpus: "0.75"
 
 networks:
   sentinela-net:

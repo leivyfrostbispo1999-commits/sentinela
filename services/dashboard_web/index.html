@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SENTINELA SOC 5.5</title>
+    <title>SENTINELA SOC 5.6</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -86,6 +86,16 @@
             font-weight: 700;
         }
         .button { padding: 0 14px; cursor: pointer; color: var(--cyan); }
+        .button.demo {
+            border-color: rgba(255, 64, 93, 0.62);
+            background: rgba(255, 64, 93, 0.16);
+            color: #ff8da0;
+            box-shadow: 0 0 18px rgba(255, 64, 93, 0.12);
+        }
+        .button.demo:disabled {
+            cursor: wait;
+            opacity: 0.72;
+        }
 
         .header-status { min-width: 260px; text-align: right; }
         .level { font-family: Consolas, monospace; font-size: 1.55rem; font-weight: 900; }
@@ -112,8 +122,247 @@
         .card { padding: 16px; min-height: 110px; }
         .card-label { color: var(--muted); font-size: 0.76rem; font-weight: 900; text-transform: uppercase; }
         .card-value { margin-top: 12px; color: var(--cyan); font-family: Consolas, monospace; font-size: 2.45rem; font-weight: 900; }
+        .card.pulse {
+            border-color: rgba(255, 64, 93, 0.45);
+            animation: cardPulse 1.2s ease-out 2;
+        }
 
-        .grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(410px, 0.75fr); gap: 16px; }
+        .incident-panel {
+            display: none;
+            margin-bottom: 16px;
+            border-color: rgba(255, 64, 93, 0.34);
+        }
+        .incident-panel.show { display: block; }
+        .incident-panel.highlight {
+            box-shadow: 0 0 34px rgba(255, 64, 93, 0.14), 0 18px 50px rgba(0, 0, 0, 0.32);
+        }
+        .incident-overview {
+            display: grid;
+            grid-template-columns: minmax(260px, 0.8fr) 1fr;
+            gap: 14px;
+            padding: 16px 18px 0;
+        }
+        .attacker-card, .incident-summary, .demo-error {
+            border: 1px solid rgba(101, 231, 255, 0.14);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.035);
+            padding: 14px;
+        }
+        .attacker-card {
+            border-color: rgba(255, 64, 93, 0.28);
+            background: rgba(255, 64, 93, 0.07);
+        }
+        .attacker-title, .summary-title {
+            color: var(--muted);
+            font-size: 0.72rem;
+            font-weight: 900;
+            text-transform: uppercase;
+        }
+        .attacker-ip {
+            margin-top: 8px;
+            color: var(--red);
+            font-family: Consolas, monospace;
+            font-size: 1.35rem;
+            font-weight: 900;
+        }
+        .attacker-grid {
+            display: grid;
+            gap: 8px;
+            margin-top: 12px;
+            font-family: Consolas, monospace;
+            font-size: 0.82rem;
+        }
+        .attacker-row {
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 8px;
+        }
+        .attacker-row span:first-child { color: var(--muted); }
+        .incident-summary p {
+            margin-top: 8px;
+            color: var(--text);
+            line-height: 1.45;
+        }
+        .incident-progress {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            padding: 16px 18px 0;
+        }
+        .progress-step {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 46px;
+            padding: 10px 12px;
+            border: 1px solid rgba(101, 231, 255, 0.12);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--muted);
+            font-family: Consolas, monospace;
+            font-size: 0.72rem;
+            font-weight: 900;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            opacity: 0.3;
+            transition: opacity 180ms ease, transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease, color 180ms ease, background 180ms ease;
+        }
+        .progress-step::before {
+            content: "";
+            width: 9px;
+            height: 9px;
+            margin-right: 10px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.03);
+        }
+        .progress-step.active {
+            opacity: 1;
+            transform: translateY(-1px);
+            box-shadow: 0 0 14px rgba(101, 231, 255, 0.12);
+        }
+        .progress-step.completed {
+            opacity: 0.7;
+        }
+        .progress-step[data-step="detection"] { color: var(--yellow); }
+        .progress-step[data-step="suspicion"] { color: var(--orange); }
+        .progress-step[data-step="correlation"] { color: var(--cyan); }
+        .progress-step[data-step="critical"],
+        .progress-step[data-step="response"] { color: var(--red); }
+        .progress-step.active[data-step="detection"],
+        .progress-step.active[data-step="suspicion"],
+        .progress-step.active[data-step="correlation"],
+        .progress-step.active[data-step="critical"],
+        .progress-step.active[data-step="response"] {
+            border-color: currentColor;
+            background: rgba(255, 255, 255, 0.05);
+            box-shadow: 0 0 14px currentColor;
+        }
+        .progress-step.active[data-step="critical"],
+        .progress-step.active[data-step="response"] {
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+        }
+        .demo-error {
+            display: none;
+            margin: 14px 18px 0;
+            border-color: rgba(255, 159, 67, 0.34);
+            background: rgba(255, 159, 67, 0.08);
+            color: var(--yellow);
+            font-weight: 800;
+        }
+        .demo-error.show { display: block; }
+        .timeline {
+            position: relative;
+            display: grid;
+            gap: 14px;
+            padding: 22px 18px 20px 34px;
+        }
+        .timeline::before {
+            content: "";
+            position: absolute;
+            left: 34px;
+            top: 24px;
+            bottom: 26px;
+            width: 2px;
+            background: linear-gradient(180deg, var(--yellow), var(--orange), var(--red));
+            box-shadow: 0 0 18px rgba(255, 64, 93, 0.14);
+        }
+        .timeline-item {
+            position: relative;
+            display: grid;
+            grid-template-columns: 54px 150px 1fr auto;
+            gap: 14px;
+            align-items: start;
+            margin-left: 18px;
+            padding: 14px;
+            border: 1px solid rgba(101, 231, 255, 0.14);
+            border-left: 5px solid var(--green);
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.03);
+            opacity: 0;
+            transform: translateY(8px);
+            animation: timelineIn 360ms ease forwards;
+        }
+        .timeline-item::before {
+            content: "";
+            position: absolute;
+            left: -31px;
+            top: 21px;
+            width: 13px;
+            height: 13px;
+            border: 2px solid currentColor;
+            border-radius: 50%;
+            background: #05080f;
+            box-shadow: 0 0 0 4px rgba(5, 8, 15, 0.96);
+        }
+        .timeline-item.low {
+            color: var(--green);
+            border-left-color: var(--green);
+            background: rgba(34, 230, 139, 0.05);
+        }
+        .timeline-item.medium {
+            color: var(--yellow);
+            border-left-color: var(--yellow);
+            background: rgba(250, 204, 21, 0.055);
+        }
+        .timeline-item.critical {
+            color: var(--red);
+            border-left-color: var(--red);
+            background: rgba(255, 64, 93, 0.08);
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+        }
+        .timeline-time, .timeline-meta { color: var(--muted); font-family: Consolas, monospace; font-size: 0.78rem; }
+        .timeline-icon {
+            display: grid;
+            place-items: center;
+            width: 40px;
+            height: 40px;
+            border: 1px solid currentColor;
+            border-radius: 7px;
+            background: rgba(255, 255, 255, 0.05);
+            font-size: 1.25rem;
+        }
+        .timeline-title { font-weight: 900; text-transform: uppercase; }
+        .timeline-desc { margin-top: 5px; color: var(--muted); }
+        .severity-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 86px;
+            min-height: 30px;
+            padding: 5px 10px;
+            border: 1px solid currentColor;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.045);
+            font-family: Consolas, monospace;
+            font-size: 0.74rem;
+            font-weight: 900;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+        .severity-badge.low { color: var(--green); }
+        .severity-badge.medium { color: var(--yellow); }
+        .severity-badge.critical { color: var(--red); }
+
+        .tag.low { color: var(--green); }
+        .tag.medium { color: var(--yellow); }
+        .tag.critical { color: var(--red); }
+
+        .action.bloqueio { color: var(--red); }
+
+        .grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.1fr) minmax(380px, 0.9fr);
+            grid-template-areas:
+                "analytics map"
+                "feed feed";
+            gap: 16px;
+            align-items: stretch;
+        }
+        .analytics-column { grid-area: analytics; display: grid; gap: 16px; align-content: start; }
+        .map-column { grid-area: map; display: grid; align-content: start; }
+        .feed-panel { grid-area: feed; }
         .panel { overflow: hidden; }
         .panel-head {
             display: flex;
@@ -301,9 +550,21 @@
             20% { opacity: 1; }
             100% { opacity: 0; clip-path: inset(0 0 0 0); }
         }
+        @keyframes cardPulse {
+            0% { box-shadow: 0 0 0 rgba(255, 64, 93, 0); }
+            45% { box-shadow: 0 0 28px rgba(255, 64, 93, 0.28); }
+            100% { box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32); }
+        }
+        @keyframes timelineIn {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
 
         @media (max-width: 1120px) {
             header, .grid, .analytics-grid { grid-template-columns: 1fr; }
+            .grid { grid-template-areas: "analytics" "map" "feed"; }
             .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .header-status { text-align: left; }
             .toolbar { justify-content: flex-start; }
@@ -313,6 +574,12 @@
             .cards { grid-template-columns: 1fr; }
             th, td { padding: 10px 8px; font-size: 0.78rem; }
             .map-stage { height: 380px; }
+            .incident-overview { grid-template-columns: 1fr; }
+            .incident-progress { grid-template-columns: 1fr; }
+            .timeline { padding-left: 24px; }
+            .timeline::before { left: 24px; }
+            .timeline-item { grid-template-columns: 1fr; margin-left: 18px; }
+            .timeline-item::before { left: -29px; }
         }
     </style>
 </head>
@@ -320,7 +587,7 @@
     <main class="shell">
         <header>
             <section>
-                <h1>SENTINELA SOC 5.5</h1>
+                <h1>SENTINELA SOC 5.6</h1>
                 <p class="subtitle">Mini-SIEM educacional/profissional com maturidade de produção: regras YAML, correlação multidimensional, autenticação simples, observabilidade e analytics.</p>
             </section>
             <aside class="header-status">
@@ -332,16 +599,16 @@
                         <option value="24h">Últimas 24h</option>
                     </select>
                     <select class="select" id="severityFilter" aria-label="Filtro de criticidade">
-                        <option value="all">Todas criticidades</option>
+                        <option value="all">Todas as severidades</option>
                         <option value="critical">Crítico</option>
                         <option value="high">Alto</option>
                         <option value="medium">Médio</option>
                         <option value="low">Baixo</option>
                     </select>
-                    <select class="select" id="sourceFilter" aria-label="Filtro de threat source">
-                        <option value="all">Todas fontes TI</option>
+                    <select class="select" id="sourceFilter" aria-label="Filtro de fonte de ameaça">
+                        <option value="all">Todas as fontes</option>
                         <option value="local">Local</option>
-                        <option value="external">External</option>
+                        <option value="external">Externa</option>
                         <option value="none">Sem TI</option>
                     </select>
                     <select class="select" id="blockFilter" aria-label="Filtro de bloqueio simulado">
@@ -349,10 +616,11 @@
                         <option value="true">Com simulated_block</option>
                         <option value="false">Sem simulated_block</option>
                     </select>
-                    <input class="search" id="searchInput" type="search" placeholder="Buscar IP, status, event_type ou service">
+                    <input class="search" id="searchInput" type="search" placeholder="Buscar IP, status, tipo de evento ou serviço">
+                    <button class="button demo" id="simulateAttackButton" type="button">Simular Ataque</button>
                     <button class="button" id="refreshButton" type="button">Atualizar</button>
                 </div>
-                <div class="muted">Threat Level</div>
+                <div class="muted">Nível de Ameaça</div>
                 <div class="level low" id="threatLevel">LOW</div>
                 <div class="muted" id="lastUpdate">Aguardando telemetria</div>
             </aside>
@@ -365,18 +633,46 @@
             <article class="card"><div class="card-label">Eventos críticos</div><div class="card-value" id="eventosCriticos">0</div></article>
             <article class="card"><div class="card-label">IPs únicos</div><div class="card-value" id="ipsUnicos">0</div></article>
             <article class="card"><div class="card-label">Bloqueios simulados</div><div class="card-value" id="bloqueios">0</div></article>
-            <article class="card"><div class="card-label">Threat Intel matches</div><div class="card-value" id="tiMatches">0</div></article>
+            <article class="card"><div class="card-label">Correspondências de Threat Intel</div><div class="card-value" id="tiMatches">0</div></article>
+        </section>
+
+        <section class="panel incident-panel" id="incidentPanel">
+            <div class="panel-head">
+                <div>
+                    <h2 class="panel-title">Linha do Tempo do Incidente</h2>
+                    <p class="muted">Progressão visual do ataque controlado registrado apenas como bloqueio simulado.</p>
+                </div>
+                <div class="live" id="incidentStatus">MODO DEMONSTRAÇÃO</div>
+            </div>
+            <div class="demo-error" id="demoError">Falha ao executar simulação. Verifique autenticação ou API.</div>
+            <div class="incident-overview" id="incidentOverview">
+                <article class="attacker-card">
+                    <div class="attacker-title">Atacante Principal</div>
+                    <div class="attacker-ip" id="attackerIp">--</div>
+                    <div class="attacker-grid">
+                        <div class="attacker-row"><span>Vetor Inicial</span><strong id="attackerVector">--</strong></div>
+                        <div class="attacker-row"><span>Severidade Máxima</span><strong id="attackerSeverity">--</strong></div>
+                        <div class="attacker-row"><span>Ação do SOC</span><strong id="attackerAction">--</strong></div>
+                    </div>
+                </article>
+                <article class="incident-summary">
+                    <div class="summary-title">Resumo do Incidente</div>
+                    <p id="incidentSummaryText">Clique em Simular Ataque para gerar uma narrativa de investigação SOC controlada.</p>
+                </article>
+            </div>
+            <div class="incident-progress" id="incidentProgress"></div>
+            <div class="timeline" id="incidentTimeline"></div>
         </section>
 
         <section class="grid">
-            <div>
+            <div class="analytics-column">
                 <section class="panel">
                     <div class="panel-head">
                         <div>
                             <h2 class="panel-title">Eventos por tempo</h2>
                             <p class="muted" id="rangeLabel">Filtro: Última 1h</p>
                         </div>
-                        <div class="live">LIVE</div>
+                        <div class="live">TEMPO REAL</div>
                     </div>
                     <div class="chart-box"><canvas id="eventsChart"></canvas></div>
                 </section>
@@ -399,40 +695,15 @@
                         <div class="chart-box"><canvas id="typeChart"></canvas></div>
                     </div>
                 </section>
-
-                <section class="panel" style="margin-top:16px">
-                    <div class="panel-head">
-                        <div>
-                            <h2 class="panel-title">Feed de alertas</h2>
-                            <p class="muted">IP, status, risco, serviço, porta, fonte de threat intel e ação SOC</p>
-                        </div>
-                    </div>
-                    <div class="feed">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Hora</th>
-                                    <th>IP</th>
-                                    <th>Status</th>
-                                    <th>Risco</th>
-                                    <th>Porta/Serviço</th>
-                                    <th>Threat Intel</th>
-                                    <th>Ação SOC</th>
-                                </tr>
-                            </thead>
-                            <tbody id="feedBody"><tr><td colspan="7">Carregando eventos...</td></tr></tbody>
-                        </table>
-                    </div>
-                </section>
             </div>
 
-            <section class="panel">
+            <section class="panel map-column">
                 <div class="panel-head">
                     <div>
                         <h2 class="panel-title">Mapa Global de Ataques</h2>
                         <p class="muted">Origens simuladas com país, cidade, tooltip e conexões simultâneas</p>
                     </div>
-                    <div class="live">ENRICHED MAP</div>
+                    <div class="live">MAPA ENRIQUECIDO</div>
                 </div>
                 <div class="map-stage" id="mapStage">
                     <svg class="world" viewBox="0 0 900 430" aria-hidden="true">
@@ -452,14 +723,40 @@
                     <div id="mapLast">Aguardando novo alerta</div>
                 </div>
             </section>
+
+            <section class="panel feed-panel">
+                <div class="panel-head">
+                    <div>
+                        <h2 class="panel-title">Feed de alertas</h2>
+                        <p class="muted">IP, status, risco, serviço, porta, fonte de threat intel e ação SOC</p>
+                    </div>
+                </div>
+                <div class="feed">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Hora</th>
+                                <th>IP</th>
+                                <th>Status</th>
+                                <th>Risco</th>
+                                <th>Consolidação</th>
+                                <th>Porta/Serviço</th>
+                                <th>Inteligência de Ameaças</th>
+                                <th>Ação SOC</th>
+                            </tr>
+                        </thead>
+                        <tbody id="feedBody"><tr><td colspan="8">Carregando eventos...</td></tr></tbody>
+                    </table>
+                </div>
+            </section>
         </section>
     </main>
 
     <div class="drawer-backdrop" id="drawerBackdrop"></div>
-    <aside class="drawer" id="detailDrawer" aria-label="Drill-down do alerta">
+    <aside class="drawer" id="detailDrawer" aria-label="Detalhamento do alerta">
         <div class="drawer-head">
             <div>
-                <h2 class="panel-title">Drill-down do alerta</h2>
+                <h2 class="panel-title">Detalhamento do alerta</h2>
                 <p class="muted">Detalhamento operacional do evento selecionado.</p>
             </div>
             <button class="button" id="closeDrawer" type="button">Fechar</button>
@@ -469,6 +766,7 @@
 
     <script>
         const API_URL = 'http://localhost:5000/alertas';
+        const DEMO_URL = 'http://localhost:5000/demo/simulate-attack';
         const API_TOKEN = 'sentinela-demo-token';
         const origins = [
             { country: 'Rússia', city: 'Moscow', ip: '45.67.89.12', x: 58, y: 28 },
@@ -487,23 +785,43 @@
         let visibleAlerts = [];
         let chart;
         let typeChart;
+        let incidentTimeline = [];
+        let demoOnlyMode = false;
 
         const el = id => document.getElementById(id);
         const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
         const risk = alert => Number.parseInt(alert.risco, 10) || 0;
         const authHeaders = { 'X-SENTINELA-TOKEN': API_TOKEN };
 
-        function severity(alert) {
-            const r = risk(alert);
-            if (r >= 95 || alert.simulated_block || alert.threat_intel_match) return 'critical';
-            if (r >= 80) return 'high';
-            if (r >= 50) return 'medium';
+        function getSeverity(riskValue) {
+            if (riskValue >= 80) return 'critical';
+            if (riskValue >= 50) return 'medium';
             return 'low';
+        }
+
+        function getSeverityColor(severityValue) {
+            switch (severityValue) {
+                case 'low': return '#22c55e';
+                case 'medium': return '#facc15';
+                case 'critical':
+                default: return '#ef4444';
+            }
+        }
+
+        function normalizeSeverityLabel(value) {
+            const normalized = String(value || '').toLowerCase();
+            if (normalized === 'low' || normalized === 'medium' || normalized === 'critical') return normalized;
+            if (normalized === 'high') return 'critical';
+            return 'low';
+        }
+
+        function severity(alert) {
+            return getSeverity(risk(alert));
         }
 
         function socAction(alert) {
             if (alert.simulated_block) return ['BLOQUEIO SIMULADO', 'bloqueio'];
-            if (risk(alert) >= 70 || alert.threat_intel_match) return ['INVESTIGANDO', 'investigando'];
+            if (risk(alert) >= 70 || alert.threat_intel_match || Number(alert.occurrence_count || 0) > 1) return ['INVESTIGANDO', 'investigando'];
             return ['MONITORADO', 'monitorado'];
         }
 
@@ -520,13 +838,14 @@
             const dy = destination.y - origin.y;
             const len = Math.sqrt(dx * dx + dy * dy);
             const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+            const sev = severity(alert);
             const line = document.createElement('div');
             line.className = 'attack-line';
             line.style.setProperty('--x1', `${origin.x}%`);
             line.style.setProperty('--y1', `${origin.y}%`);
             line.style.setProperty('--len', `${len}%`);
             line.style.setProperty('--angle', `${angle}deg`);
-            line.style.setProperty('--line-color', severity(alert) === 'critical' ? '#ff405d' : '#ffd166');
+            line.style.setProperty('--line-color', getSeverityColor(sev));
             el('lines').appendChild(line);
             setTimeout(() => line.remove(), 2400);
             el('mapLast').textContent = `${origin.country} / ${origin.city} -> Brasil / Salvador | ${alert.status || 'N/D'}`;
@@ -548,11 +867,37 @@
         }
 
         function updateCards(alerts) {
-            el('totalEventos').textContent = alerts.length;
-            el('eventosCriticos').textContent = alerts.filter(a => severity(a) === 'critical').length;
+            const totalOccurrences = alerts.reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
+            const criticalOccurrences = alerts.filter(a => severity(a) === 'critical').reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
+            const blockOccurrences = alerts.filter(a => a.simulated_block).reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
+            const tiOccurrences = alerts.filter(a => a.threat_intel_match).reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
+            el('totalEventos').textContent = totalOccurrences;
+            el('eventosCriticos').textContent = criticalOccurrences;
             el('ipsUnicos').textContent = new Set(alerts.map(a => a.ip).filter(Boolean)).size;
-            el('bloqueios').textContent = alerts.filter(a => a.simulated_block).length;
-            el('tiMatches').textContent = alerts.filter(a => a.threat_intel_match).length;
+            el('bloqueios').textContent = blockOccurrences;
+            el('tiMatches').textContent = tiOccurrences;
+        }
+
+        function pulseCards() {
+            document.querySelectorAll('.card').forEach(card => {
+                card.classList.remove('pulse');
+                void card.offsetWidth;
+                card.classList.add('pulse');
+                setTimeout(() => card.classList.remove('pulse'), 2600);
+            });
+        }
+
+        function applyDemoCardBoost(payload) {
+            const eventsCreated = Number(payload.events_created || 0);
+            const criticalCreated = (payload.alerts || []).filter(alert => risk(alert) >= 95 || alert.simulated_block || alert.threat_intel_match).length;
+            const tiCreated = (payload.alerts || []).filter(alert => alert.threat_intel_match).length;
+            const simulatedBlocks = (payload.alerts || []).filter(alert => alert.simulated_block).length;
+            const current = id => Number.parseInt(el(id).textContent, 10) || 0;
+            el('totalEventos').textContent = current('totalEventos') + eventsCreated;
+            el('eventosCriticos').textContent = current('eventosCriticos') + criticalCreated;
+            el('ipsUnicos').textContent = Math.max(current('ipsUnicos'), new Set((payload.alerts || []).map(alert => alert.ip).filter(Boolean)).size);
+            el('bloqueios').textContent = current('bloqueios') + simulatedBlocks;
+            el('tiMatches').textContent = current('tiMatches') + tiCreated;
         }
 
         function applyClientFilters(alerts) {
@@ -579,6 +924,13 @@
                     alert.service,
                     alert.correlation_key,
                     alert.correlation_reason,
+                    alert.occurrence_count,
+                    alert.first_seen,
+                    alert.last_seen,
+                    alert.aggregated,
+                    Array.isArray(alert.ports) ? alert.ports.join(' ') : alert.ports,
+                    Array.isArray(alert.services) ? alert.services.join(' ') : alert.services,
+                    Array.isArray(alert.event_types) ? alert.event_types.join(' ') : alert.event_types,
                 ].join(' ').toLowerCase();
                 return haystack.includes(term);
             });
@@ -607,7 +959,7 @@
             const buckets = {};
             alerts.slice().reverse().forEach(alert => {
                 const label = String(alert.ts || '').slice(11, 16) || '--:--';
-                buckets[label] = (buckets[label] || 0) + 1;
+                buckets[label] = (buckets[label] || 0) + Number(alert.occurrence_count || 1);
             });
             const labels = Object.keys(buckets).slice(-16);
             const values = labels.map(label => buckets[label]);
@@ -643,14 +995,20 @@
             const byType = {};
 
             alerts.forEach(alert => {
+                const weight = Number(alert.occurrence_count || 1);
                 if (alert.ip) {
                     byIp[alert.ip] ||= { count: 0, riskSum: 0 };
-                    byIp[alert.ip].count += 1;
-                    byIp[alert.ip].riskSum += risk(alert);
+                    byIp[alert.ip].count += weight;
+                    byIp[alert.ip].riskSum += risk(alert) * weight;
                 }
-                if (alert.port) byPort[alert.port] = (byPort[alert.port] || 0) + 1;
-                const type = alert.event_type || 'unknown';
-                byType[type] = (byType[type] || 0) + 1;
+                const ports = Array.isArray(alert.ports) && alert.ports.length ? alert.ports : [alert.port];
+                ports.filter(Boolean).forEach(port => {
+                    byPort[port] = (byPort[port] || 0) + weight;
+                });
+                const types = Array.isArray(alert.event_types) && alert.event_types.length ? alert.event_types : [alert.event_type || 'unknown'];
+                types.filter(Boolean).forEach(type => {
+                    byType[type] = (byType[type] || 0) + weight;
+                });
             });
 
             const ipRows = Object.entries(byIp);
@@ -684,32 +1042,189 @@
 
         function renderFeed(alerts) {
             if (!alerts.length) {
-                el('feedBody').innerHTML = '<tr><td colspan="7">Nenhum alerta no período selecionado.</td></tr>';
+                el('feedBody').innerHTML = '<tr><td colspan="8">Nenhum alerta no período selecionado.</td></tr>';
                 return;
             }
             el('feedBody').innerHTML = alerts.slice(0, 80).map(alert => {
-                const sev = severity(alert);
+                const sev = getSeverity(risk(alert));
+                const color = getSeverityColor(sev);
+                const glow = sev === 'critical' ? 'box-shadow:0 0 8px rgba(239, 68, 68, 0.6);' : sev === 'medium' ? 'box-shadow:0 0 6px rgba(250, 204, 21, 0.22);' : '';
                 const [action, actionClass] = socAction(alert);
+                const occurrenceCount = Number(alert.occurrence_count || 1);
+                const occurrenceLabel = occurrenceCount > 1 ? `x${occurrenceCount}` : 'x1';
+                const firstSeen = alert.first_seen ? new Date(alert.first_seen).toLocaleTimeString('pt-BR') : 'N/D';
+                const lastSeen = alert.last_seen ? new Date(alert.last_seen).toLocaleTimeString('pt-BR') : 'N/D';
+                const aggregated = alert.aggregated ? 'AGREGADO' : 'INDIVIDUAL';
+                const ports = Array.isArray(alert.ports) && alert.ports.length ? alert.ports.join(', ') : (alert.port ? String(alert.port) : 'N/D');
+                const services = Array.isArray(alert.services) && alert.services.length ? alert.services.join(', ') : (alert.service || 'N/D');
+                const eventTypes = Array.isArray(alert.event_types) && alert.event_types.length ? alert.event_types.join(', ') : (alert.event_type || 'N/D');
+                const consolidationClass = occurrenceCount > 1 ? (sev === 'critical' ? 'critical' : 'medium') : 'low';
                 const ti = alert.threat_intel_match
                     ? `<span class="ti">${esc(alert.threat_category || 'IOC')}</span><br><span class="muted">${esc(alert.threat_source || 'local')}</span>`
                     : '<span class="muted">Sem IOC</span>';
                 return `
                     <tr class="clickable-row" data-alert-id="${esc(alert.id)}">
-                        <td class="mono">${esc(alert.ts)}</td>
+                        <td class="mono" style="border-left:4px solid ${color}; color:${color}">${esc(alert.ts)}</td>
                         <td class="mono">${esc(alert.ip)}</td>
-                        <td><span class="tag ${sev}">${esc(alert.status)}</span></td>
-                        <td class="mono">${risk(alert)}</td>
-                        <td class="mono">${esc(alert.port || 'N/D')} / ${esc(alert.service || 'N/D')}</td>
+                        <td><span class="tag ${sev}" style="color:${color}; border-color:${color}; ${glow}">${esc(alert.status)}</span></td>
+                        <td class="mono" style="color:${color}">${risk(alert)}</td>
+                        <td class="mono">
+                            <div class="tag ${consolidationClass}">${esc(occurrenceLabel)} ${esc(aggregated)}</div>
+                            <div class="muted">${esc(firstSeen)} -> ${esc(lastSeen)}</div>
+                            <div class="muted">${esc(eventTypes)}</div>
+                        </td>
+                        <td class="mono">${esc(ports)} / ${esc(services)}</td>
                         <td>${ti}</td>
                         <td><span class="action ${actionClass}">${action}</span></td>
                     </tr>`;
             }).join('');
         }
 
+        function renderIncidentProgress(items) {
+            const steps = [
+                { key: 'detection', label: 'DETECÇÃO', active: false, completed: false },
+                { key: 'suspicion', label: 'SUSPEITA', active: false, completed: false },
+                { key: 'correlation', label: 'CORRELAÇÃO', active: false, completed: false },
+                { key: 'critical', label: 'CRITICAL', active: false, completed: false },
+                { key: 'response', label: 'RESPOSTA', active: false, completed: false },
+            ];
+
+            const hasEvents = (items || []).length > 0;
+            const hasSuspicion = (items || []).some(item => {
+                const text = `${item.stage || ''} ${item.event_type || ''} ${item.description || ''}`.toLowerCase();
+                return text.includes('brute force') || text.includes('suspeito');
+            });
+            const hasCorrelation = (items || []).some(item => {
+                const text = `${item.stage || ''} ${item.description || ''}`.toLowerCase();
+                return text.includes('regra yaml') || text.includes('correlation');
+            });
+            const hasCritical = (items || []).some(item => normalizeSeverityLabel(item.severity) === 'critical' || risk(item) >= 80);
+            const hasResponse = (items || []).some(item => item.simulated_block);
+
+            const states = {
+                detection: hasEvents,
+                suspicion: hasSuspicion,
+                correlation: hasCorrelation,
+                critical: hasCritical,
+                response: hasResponse,
+            };
+
+            const highestIndex = [...steps].reverse().findIndex(step => states[step.key]);
+            const lastActiveIndex = highestIndex === -1 ? -1 : steps.length - 1 - highestIndex;
+
+            const container = el('incidentProgress');
+            if (!hasEvents) {
+                container.innerHTML = '';
+                return;
+            }
+
+            container.innerHTML = steps.map((step, index) => {
+                const active = states[step.key];
+                const completed = active && index < lastActiveIndex;
+                return `<div class="progress-step${active ? ' active' : ''}${completed ? ' completed' : ''}" data-step="${step.key}">${step.label}</div>`;
+            }).join('');
+        }
+
+        function renderIncidentTimeline(items) {
+            incidentTimeline = items || [];
+            el('incidentPanel').classList.toggle('show', incidentTimeline.length > 0);
+            renderIncidentProgress(incidentTimeline);
+            if (!incidentTimeline.length) {
+                el('incidentTimeline').innerHTML = '';
+                return;
+            }
+
+            el('incidentTimeline').innerHTML = incidentTimeline.map(item => {
+                const sev = normalizeSeverityLabel(item.severity || getSeverity(risk(item)));
+                const color = getSeverityColor(sev);
+                const time = item.timestamp ? new Date(item.timestamp).toLocaleTimeString('pt-BR') : '--:--:--';
+                const icon = timelineIcon(item.stage, item.event_type, sev);
+                const delay = (incidentTimeline.indexOf(item) * 120);
+                return `
+                    <div class="timeline-item ${esc(sev)}" style="animation-delay:${delay}ms; --severity-color:${color}; border-left-color:${color};">
+                        <div class="timeline-icon" aria-hidden="true" style="color:${color}">${icon}</div>
+                        <div class="timeline-time">${esc(time)}</div>
+                        <div>
+                            <div class="timeline-title">${esc(item.stage)}</div>
+                            <div class="timeline-desc">${esc(item.description)}</div>
+                            <div class="timeline-meta">${esc(item.ip)} | ${esc(item.event_type)}</div>
+                        </div>
+                        <span class="severity-badge ${sev}" style="color:${color}; border-color:${color}; ${sev === 'critical' ? 'box-shadow:0 0 8px rgba(239, 68, 68, 0.6);' : sev === 'medium' ? 'box-shadow:0 0 6px rgba(250, 204, 21, 0.22);' : ''}">${esc(String(item.severity || sev).toUpperCase())}</span>
+                    </div>`;
+            }).join('');
+        }
+
+        function timelineIcon(stage, eventType, severityValue) {
+            const normalized = `${stage || ''} ${eventType || ''}`.toLowerCase();
+            if (normalized.includes('simulated_block')) return '🛡';
+            if (severityValue === 'critical' || normalized.includes('yaml') || normalized.includes('threat') || normalized.includes('critical')) return '🚨';
+            if (normalized.includes('suspeito') || normalized.includes('brute')) return '⚠️';
+            return '🔍';
+        }
+
+        function renderIncidentOverview(payload) {
+            const attacker = payload.primary_attacker || {};
+            const timeline = payload.timeline || [];
+            const first = timeline[0] || {};
+            const maxSeverity = attacker.max_severity || timeline.reduce((current, item) => item.severity === 'CRITICAL' ? 'CRITICAL' : current, 'MEDIUM');
+            el('attackerIp').textContent = attacker.ip || first.ip || '--';
+            el('attackerVector').textContent = attacker.initial_vector || first.event_type || '--';
+            el('attackerSeverity').textContent = maxSeverity;
+            el('attackerAction').textContent = attacker.soc_action || (payload.simulated_block ? 'Apenas bloqueio simulado' : 'Apenas monitoramento');
+            el('incidentSummaryText').textContent = payload.incident_summary || `Ataque controlado detectado a partir do IP ${first.ip || '--'}. Regras de correlação elevaram o incidente para nível CRÍTICO e registraram bloqueio simulado, sem execução de bloqueio real.`;
+        }
+
+        function showDemoError(message) {
+            el('incidentPanel').classList.add('show');
+            el('demoError').textContent = message || 'Falha ao executar simulação. Verifique autenticação ou API.';
+            el('demoError').classList.add('show');
+        }
+
+        function hideDemoError() {
+            el('demoError').classList.remove('show');
+        }
+
+        async function simulateAttack() {
+            const button = el('simulateAttackButton');
+            button.disabled = true;
+            button.textContent = 'Simulando...';
+
+            try {
+                const response = await fetch(DEMO_URL, {
+                    method: 'POST',
+                    cache: 'no-store',
+                    headers: authHeaders
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const payload = await response.json();
+                hideDemoError();
+                demoOnlyMode = true;
+                renderIncidentOverview(payload);
+                renderIncidentTimeline(payload.timeline || []);
+                el('criticalBanner').classList.add('show');
+                el('incidentPanel').classList.add('highlight');
+                el('threatLevel').textContent = 'CRITICAL';
+                el('threatLevel').className = 'level critical';
+                pulseCards();
+                (payload.alerts || []).forEach(alert => animateAttack(alert));
+                await refresh();
+                applyDemoCardBoost(payload);
+                el('incidentStatus').textContent = `SIMULAÇÃO: ${payload.events_created || 0} EVENTOS`;
+                button.textContent = `Simulação: ${payload.events_created || 0} eventos`;
+            } catch (error) {
+                el('incidentStatus').textContent = 'FALHA NA SIMULAÇÃO';
+                showDemoError('Falha ao executar simulação. Verifique autenticação ou API.');
+            } finally {
+                button.disabled = false;
+                if (!button.textContent.startsWith('Simulação:')) button.textContent = 'Simular Ataque';
+            }
+        }
+
         async function refresh() {
             const selectedRange = el('rangeSelect').value;
             try {
-                const response = await fetch(`${API_URL}?range=${encodeURIComponent(selectedRange)}`, { cache: 'no-store', headers: authHeaders });
+                const demoQuery = demoOnlyMode ? '&mode=demo' : '';
+                const response = await fetch(`${API_URL}?range=${encodeURIComponent(selectedRange)}${demoQuery}`, { cache: 'no-store', headers: authHeaders });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const payload = await response.json();
                 const alerts = Array.isArray(payload) ? payload : (payload.data || []);
@@ -732,15 +1247,23 @@
                 ['IP', alert.ip],
                 ['Status', alert.status],
                 ['Risco', risk(alert)],
-                ['Event type', alert.event_type],
-                ['Service', alert.service],
+                ['Tipo de evento', alert.event_type],
+                ['Serviço', alert.service],
                 ['Port', alert.port],
-                ['Threat category', alert.threat_category || 'N/D'],
-                ['Threat description', alert.threat_description || 'N/D'],
-                ['Threat source', alert.threat_source || 'N/D'],
-                ['Correlation key', alert.correlation_key || 'N/D'],
-                ['Correlation reason', alert.correlation_reason || 'N/D'],
-                ['Simulated block', alert.simulated_block ? 'true' : 'false'],
+                ['Categoria de ameaça', alert.threat_category || 'N/D'],
+                ['Descrição da ameaça', alert.threat_description || 'N/D'],
+                ['Fonte de ameaça', alert.threat_source || 'N/D'],
+                ['Chave de correlação', alert.correlation_key || 'N/D'],
+                ['Motivo da correlação', alert.correlation_reason || 'N/D'],
+                ['Ocorrências', alert.occurrence_count || 1],
+                ['Primeiro registro', alert.first_seen || 'N/D'],
+                ['Último registro', alert.last_seen || 'N/D'],
+                ['Agregado', alert.aggregated ? 'true' : 'false'],
+                ['Ports observados', Array.isArray(alert.ports) ? alert.ports.join(', ') : (alert.port || 'N/D')],
+                ['Serviços observados', Array.isArray(alert.services) ? alert.services.join(', ') : (alert.service || 'N/D')],
+                ['Tipos de evento', Array.isArray(alert.event_types) ? alert.event_types.join(', ') : (alert.event_type || 'N/D')],
+                ['Ação do SOC', alert.action_soc || alert.auto_response || 'N/D'],
+                ['Bloqueio simulado', alert.simulated_block ? 'true' : 'false'],
                 ['Timestamp', alert.ts],
             ];
             el('detailContent').innerHTML = fields.map(([label, value]) => `
@@ -759,6 +1282,7 @@
         }
 
         el('refreshButton').addEventListener('click', refresh);
+        el('simulateAttackButton').addEventListener('click', simulateAttack);
         el('rangeSelect').addEventListener('change', () => {
             seenIds = new Set();
             refresh();

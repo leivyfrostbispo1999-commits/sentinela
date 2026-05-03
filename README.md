@@ -1,10 +1,22 @@
-# SENTINELA SOC
+# Sentinela SOC 5.6
 
-Mini-SIEM educacional/profissional com arquitetura inspirada em ambientes reais de SOC.
+Sentinela SOC 5.6 é um mini-SIEM educacional/profissional com arquitetura inspirada em ambientes reais de SOC.
 
-O SENTINELA demonstra um pipeline completo de segurança: geração e coleta de eventos, ingestão via Kafka, detecção por regras, correlação temporal, Threat Intelligence, persistência em PostgreSQL, métricas Prometheus e dashboard SOC em tempo real.
+O projeto demonstra um pipeline completo de segurança: geração e coleta de eventos, ingestão via Kafka, detecção por regras YAML, correlação temporal com state store Redis, Threat Intelligence, persistência em PostgreSQL, autenticação por token/JWT, métricas Prometheus e dashboard SOC em tempo real.
 
-Este projeto não pretende substituir plataformas como Splunk, Elastic, QRadar ou Wazuh. O objetivo é demonstrar maturidade técnica, organização de código e domínio dos componentes centrais de um pipeline SIEM moderno.
+Ele não pretende substituir Splunk, Elastic, QRadar, Wazuh ou outra plataforma corporativa. O objetivo é demonstrar maturidade técnica, organização de código, segurança por padrão e capacidade de evolução.
+
+## What's New in 5.6
+
+- Redis como state store do `rule_engine`, com fallback automático para memória.
+- Autenticação JWT HMAC-SHA256 mantendo compatibilidade com `X-SENTINELA-TOKEN`.
+- Endpoint `/auth/token` para emissão de JWT de demo usando o token legado.
+- Testes com `pytest` para scoring, detecção, autenticação e `simulated_block`.
+- GitHub Actions com `pytest` e `py_compile`.
+- Serviço Redis adicionado ao Docker Compose.
+- Profile educacional `kafka-lab` com broker Kafka adicional sem quebrar o modo single broker.
+- Modo de demonstração de incidente com botão `Simular Ataque` e `Incident Timeline`.
+- README atualizado para refletir a versão 5.6 e as decisões técnicas.
 
 ## Architecture
 
@@ -16,6 +28,9 @@ Kafka topic: raw_logs
         |
         v
 rule_engine
+        |
+        +--> Redis state store
+        |    fallback: in-memory state
         |
         v
 Kafka topic: security_alerts
@@ -33,38 +48,43 @@ dashboard_api
 dashboard_web
 ```
 
-## Features
+## Core Features
 
 - Event-driven architecture with Kafka.
 - Raw event ingestion through `raw_logs`.
 - Enriched alert publication through `security_alerts`.
-- Rule-based detection with configurable YAML rules.
+- Configurable YAML detection rules.
 - Temporal and multidimensional correlation by IP, service, port and event type.
+- Redis-backed correlation state with safe in-memory fallback.
 - Local and simulated external Threat Intelligence.
 - Risk scoring based on event type, sensitive ports, frequency, sequence and IOC match.
 - Safe automated response using `simulated_block`.
 - PostgreSQL persistence with backward-compatible schema evolution.
-- REST API with token authentication.
+- REST API with legacy token and JWT authentication.
 - Prometheus-compatible `/metrics` endpoint.
 - SOC dashboard with filters, search, ranking, analytics, attack map and drill-down.
+- Demo Mode with controlled incident simulation and visual incident timeline.
+- CI pipeline with tests and Python compilation checks.
 
 ## Services
 
 | Service | Role |
 | --- | --- |
-| `kafka` | Event broker for raw logs and enriched alerts. |
+| `kafka` | Single broker used by default for local event streaming. |
+| `redis` | State store for rule engine correlation windows. |
 | `db` | PostgreSQL database for alert history. |
 | `log_collector` | Produces baseline log events into Kafka. |
 | `simulator` | Generates normal traffic, bursts, IOCs and attack sequences. |
-| `rule_engine` | Applies YAML rules, correlation, Threat Intelligence and risk scoring. |
+| `rule_engine` | Applies rules, correlation, Threat Intelligence and risk scoring. |
 | `alert_sink` | Consumes enriched alerts and persists them in PostgreSQL. |
-| `dashboard_api` | Exposes alert, health and metrics endpoints. |
+| `dashboard_api` | Exposes health, auth, alert and metrics endpoints. |
 | `dashboard_web` | Static SOC dashboard served by Nginx. |
 
 ## Requirements
 
 - Docker
 - Docker Compose
+- Python 3.11+ for local tests
 
 ## Running Locally
 
@@ -92,18 +112,20 @@ http://localhost:8080
 
 ## Endpoints
 
-| Endpoint | Description | Authentication |
-| --- | --- | --- |
-| `GET /health` | API and database health check. | No |
-| `GET /alertas?range=5m` | Alerts from the selected time range. | Yes |
-| `GET /alertas?range=1h` | Alerts from the selected time range. | Yes |
-| `GET /metrics` | Prometheus-compatible metrics. | Yes |
-
 Base API URL:
 
 ```text
 http://localhost:5000
 ```
+
+| Endpoint | Description | Authentication |
+| --- | --- | --- |
+| `GET /health` | API and database health check. | No |
+| `POST /auth/token` | Issues a demo JWT using the legacy token. | Legacy token |
+| `POST /demo/simulate-attack` | Registers a controlled demo incident. | Yes |
+| `GET /alertas?range=5m` | Alerts from the selected time range. | Yes |
+| `GET /alertas?range=1h` | Alerts from the selected time range. | Yes |
+| `GET /metrics` | Prometheus-compatible metrics. | Yes |
 
 Supported alert ranges:
 
@@ -114,25 +136,123 @@ Supported alert ranges:
 
 ## Authentication
 
-Protected endpoints accept the token using either header:
+Protected endpoints accept the legacy demo token:
 
 ```text
 X-SENTINELA-TOKEN: sentinela-demo-token
 ```
 
-or:
+They also accept Bearer authentication:
 
 ```text
 Authorization: Bearer sentinela-demo-token
 ```
 
-The token is configured with:
+or a JWT issued by `/auth/token`:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5000/auth/token" `
+  -Headers @{ "X-SENTINELA-TOKEN" = "sentinela-demo-token" }
+```
+
+Relevant environment variables:
 
 ```text
 SENTINELA_API_TOKEN=sentinela-demo-token
+SENTINELA_JWT_SECRET=sentinela-demo-jwt-secret
+SENTINELA_JWT_TTL_SECONDS=3600
 ```
 
-The dashboard sends the token automatically in API requests.
+The dashboard keeps using the legacy token header for local demo compatibility.
+
+## Demo Mode
+
+Sentinela SOC 5.6 includes a visible incident demonstration mode for presentations and recruiter walkthroughs.
+
+How to use:
+
+```powershell
+docker compose up -d --build
+```
+
+Open:
+
+```text
+http://localhost:8080
+```
+
+Click:
+
+```text
+Simular Ataque
+```
+
+The dashboard will:
+
+- Highlight `INCIDENTE CRÍTICO EM ANDAMENTO`.
+- Update the main cards.
+- Animate attack lines on the global map.
+- Render the `Incident Timeline`.
+- Show stages such as event received, suspicious IP identified, brute force detection, YAML rule match, Threat Intelligence match and `simulated_block`.
+
+The API endpoint used by the button is:
+
+```text
+POST /demo/simulate-attack
+```
+
+It requires the same authentication as other protected endpoints and records demo alerts in PostgreSQL. It does not execute firewall rules, `iptables` or any real blocking action. The response action is represented only by:
+
+```text
+simulated_block=true
+```
+
+## Incident Timeline UX
+
+After clicking `Simular Ataque`, the dashboard shows a SOC-style investigation timeline with seven connected stages. The view highlights the attacker, the detection sequence, the rule correlation and the safe response decision.
+
+The `Primary Attacker` card summarizes:
+
+- Main attacker IP.
+- Initial vector.
+- Maximum severity.
+- SOC response status.
+
+The `Incident Summary` provides a short narrative for demos, videos and interviews. It explains that a controlled attack was detected, correlation rules elevated the incident to `CRITICAL`, and the system registered `simulated_block` without real blocking.
+
+This feature is educational and demonstrative. It is designed to show detection, correlation and response logic while keeping the environment safe.
+
+## Redis State Store
+
+The rule engine uses Redis to store correlation windows by IP:
+
+```text
+REDIS_URL=redis://redis:6379/0
+REDIS_STATE_ENABLED=true
+CORRELATION_WINDOW_SECONDS=300
+```
+
+If Redis is unavailable, the rule engine logs the failure and falls back to in-memory state. This keeps the demo resilient while showing the intended production direction.
+
+## Noise Reduction & SOC Correlation
+
+Sentinela SOC 5.6 reduces noise in the alert pipeline without removing historical retention.
+
+How it works:
+
+- Repeated alerts with the same `ip`, `event_type`, `status`, `port` and `threat_category` are consolidated.
+- Alerts emitted many times inside the configured window are rate limited by IP and status.
+- Related events are aggregated per IP into a single consolidated alert when possible.
+- The alert keeps `first_seen`, `last_seen`, `occurrence_count`, `ports`, `services`, `event_types` and `aggregated`.
+- Redis stores correlation state when available; in-memory fallback keeps the demo working if Redis is offline.
+
+Important distinction:
+
+- Raw events remain part of the SIEM history.
+- Consolidated alerts are the view used by the dashboard for faster SOC triage.
+- Demo mode can be isolated with `mode=demo` so the presentation does not mix with historical noise.
 
 ## Detection Rules
 
@@ -160,23 +280,23 @@ The rule engine ignores disabled rules, applies higher priority matches first an
 
 ## Simulated Blocking
 
-Real blocking is intentionally disabled:
+Real blocking remains disabled:
 
 ```text
 ENABLE_BLOCK=false
 ```
 
-No real firewall or `iptables` action is executed. High-risk events are marked with:
+No firewall, `iptables` or host-level blocking action is executed. High-risk events are marked with:
 
 ```text
 simulated_block=true
 ```
 
-This keeps the demo safe while still showing how SOC response logic could be represented.
+This keeps the project safe for demos and portfolio review while preserving the SOC response concept.
 
 ## Observability
 
-The API exposes Prometheus-format metrics at:
+The API exposes Prometheus-format metrics:
 
 ```text
 http://localhost:5000/metrics
@@ -189,17 +309,66 @@ Metrics include:
 - `sentinela_ioc_events_total`
 - `sentinela_events_by_type_total`
 
-A reference Prometheus configuration is available at:
+Reference configuration:
 
 ```text
 infra/prometheus/prometheus.yml
 ```
+
+## Kafka Multi-Broker Lab
+
+The default mode remains a single Kafka broker for simplicity and reliability in local demos.
+
+Version 5.6 adds an educational Compose profile:
+
+```powershell
+docker compose --profile kafka-lab up -d --build
+```
+
+This starts an additional Kafka broker service for architecture discussion and experimentation. It is not required for the normal demo path and does not change the default single-broker behavior.
+
+## Running Tests
+
+Install test dependencies:
+
+```powershell
+py -m pip install pytest
+py -m pip install -r services/rule_engine/requirements.txt
+py -m pip install -r services/dashboard_api/requirements.txt
+```
+
+Run:
+
+```powershell
+py -m pytest -q
+```
+
+Compile service files:
+
+```powershell
+py -m py_compile services\log_collector\main.py services\rule_engine\main.py services\alert-sink\main.py services\dashboard_api\main.py services\simulator\main.py
+```
+
+## CI
+
+GitHub Actions workflow:
+
+```text
+.github/workflows/ci.yml
+```
+
+The pipeline runs:
+
+- dependency installation
+- Python compilation checks
+- `pytest`
 
 ## Technology Stack
 
 - Python
 - Flask
 - Kafka
+- Redis
 - PostgreSQL
 - Docker Compose
 - Nginx
@@ -207,6 +376,16 @@ infra/prometheus/prometheus.yml
 - Chart.js
 - Prometheus client library
 - YAML-based rules
+- GitHub Actions
+- Pytest
+
+## Technical Decision History
+
+- **4.0:** Visual SOC dashboard, attack map, local Threat Intelligence and simulated blocking.
+- **5.0:** YAML rules, temporal ranges, Prometheus metrics and richer analytics.
+- **5.5:** Production maturity pass with API token authentication, documentation, observability and repository cleanup.
+- **5.6:** Redis state store, JWT compatibility, pytest coverage, CI workflow and educational Kafka multi-broker profile.
+- **5.6 Demo Mode:** Controlled incident simulation with a visual timeline; no real blocking is executed.
 
 ## Repository Structure
 
@@ -222,6 +401,8 @@ services/
 docs/
 infra/
 scripts/
+tests/
+.github/
 docker-compose.yml
 README.md
 .gitignore
@@ -229,20 +410,19 @@ README.md
 
 ## Honest Limitations
 
-- Kafka runs as a single broker for local demonstration.
-- Correlation state is local and in memory.
+- Kafka still runs as a single broker by default.
+- The additional Kafka broker is educational and not a complete production cluster.
+- Redis improves correlation state maturity, but full distributed stream processing would need stronger partition/state guarantees.
 - External Threat Intelligence is simulated for safe portfolio usage.
-- Authentication is token-based and intentionally simple.
+- JWT is intentionally simple and suitable for demo, not a full identity platform.
 - There is no RBAC, multi-tenancy or production-grade identity provider.
 - There is no schema registry or formal dead-letter queue yet.
-- Prometheus is documented and configured, but not added to Compose by default.
 
 ## Next Steps
 
-- Add Kafka multi-broker support with planned partitions and replication.
 - Add schema validation and dead-letter topics.
-- Move correlation state to Redis, Kafka Streams or another state store.
+- Add Kafka partitioning strategy by IP or tenant.
 - Add Alembic or another versioned migration tool.
-- Add automated tests for detection and API behavior.
-- Add optional Prometheus and Grafana services to Docker Compose.
-- Add load testing with throughput, latency and consumer lag metrics.
+- Add service-level metrics for Kafka lag, Redis health and processing latency.
+- Add Grafana dashboards.
+- Add integration tests with Docker Compose.

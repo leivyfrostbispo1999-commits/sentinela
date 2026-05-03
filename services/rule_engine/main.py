@@ -1,9 +1,12 @@
 import json
+import hashlib
 import os
+import socket
 import sys
 import time
 import uuid
 from collections import defaultdict, deque
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,11 +23,27 @@ MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
 RULES_PATH = Path(os.getenv("RULES_PATH", "rules.yaml"))
 
 STATE_WINDOW_SECONDS = int(os.getenv("CORRELATION_WINDOW_SECONDS", "300"))
+ALERT_DEDUP_WINDOW_SECONDS = int(os.getenv("ALERT_DEDUP_WINDOW_SECONDS", "60"))
+ALERT_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("ALERT_RATE_LIMIT_WINDOW_SECONDS", "60"))
+ALERT_AGGREGATION_WINDOW_SECONDS = int(os.getenv("ALERT_AGGREGATION_WINDOW_SECONDS", "120"))
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+REDIS_STATE_ENABLED = os.getenv("REDIS_STATE_ENABLED", "true").lower() == "true"
 HOSTILE_CAMPAIGN_THRESHOLD = 8
 SENSITIVE_PORTS = {22, 23, 3389, 445, 5432, 3306, 6379, 9200}
 CRITICAL_STATUSES = {"ATAQUE MULTIETAPA", "CAMPANHA HOSTIL", "BRUTE FORCE CRITICO", "BRUTE FORCE CRÍTICO", "IOC DETECTADO"}
+SEVERITY_PRIORITY = {
+    "TRÁFEGO NORMAL": 0,
+    "TRAFego NORMAL": 0,
+    "ATIVIDADE SUSPEITA": 1,
+    "PORT SCAN": 1,
+    "BRUTE FORCE": 2,
+    "IOC DETECTADO": 3,
+    "ATAQUE MULTIETAPA": 4,
+    "CAMPANHA HOSTIL": 4,
+    "BRUTE FORCE CRITICO": 4,
+    "BRUTE FORCE CRÍTICO": 4,
+}
 
-ip_events = defaultdict(lambda: deque())
 threat_cache = {}
 
 
@@ -45,6 +64,246 @@ def log_json(level, message, **fields):
 
 def backoff_delay(attempt):
     return min(MAX_BACKOFF_SECONDS, 1.5 * (2 ** min(attempt, 4)))
+
+
+def parse_epoch(value):
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not value:
+        return time.time()
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.timestamp()
+    except Exception:
+        return time.time()
+
+
+def epoch_to_iso(value):
+    return datetime.fromtimestamp(float(value), timezone.utc).isoformat()
+
+
+def unique_preserve_order(values):
+    seen = set()
+    ordered = []
+    for value in values:
+        if value is None:
+            continue
+        marker = json.dumps(value, sort_keys=True, ensure_ascii=False) if isinstance(value, (dict, list)) else value
+        if marker in seen:
+            continue
+        seen.add(marker)
+        ordered.append(value)
+    return ordered
+
+
+def sort_values(values):
+    normalized = []
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, int):
+            normalized.append(value)
+        else:
+            try:
+                normalized.append(int(value))
+            except Exception:
+                normalized.append(str(value))
+    return normalized
+
+
+def stable_alert_instance_id(aggregation_key, first_seen_epoch):
+    bucket = int(float(first_seen_epoch) // max(1, ALERT_AGGREGATION_WINDOW_SECONDS))
+    seed = f"{aggregation_key}|{bucket}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+
+
+def alert_signature(alert):
+    parts = [
+        str(alert.get("ip") or ""),
+        str(alert.get("event_type") or ""),
+        str(alert.get("status") or ""),
+        str(alert.get("port") or ""),
+        str(alert.get("threat_category") or ""),
+    ]
+    return "|".join(parts)
+
+
+def alert_aggregation_key(alert):
+    return f"{alert.get('ip') or 'unknown'}|status:{alert.get('status') or 'unknown'}"
+
+
+def summarize_bucket(aggregation_key, status, entries, base_alert):
+    if not entries:
+        entries = [base_alert]
+
+    occurrence_count = len(entries)
+    first_seen_epoch = min(item["seen_at"] for item in entries)
+    last_seen_epoch = max(item["seen_at"] for item in entries)
+    ports = unique_preserve_order(sort_values(item.get("port") for item in entries))
+    services = unique_preserve_order([str(item.get("service") or "unknown").lower() for item in entries])
+    event_types = unique_preserve_order([str(item.get("event_type") or "unknown").upper() for item in entries])
+    max_risk = max(int(item.get("risk") or 0) for item in entries)
+    threat_candidates = [item for item in entries if item.get("threat_intel_match") or item.get("threat_category")]
+    threat_item = threat_candidates[-1] if threat_candidates else base_alert
+    simulated_block = any(bool(item.get("simulated_block")) for item in entries)
+    action_soc = "BLOQUEIO SIMULADO" if simulated_block else ("INVESTIGANDO" if max_risk >= 70 or threat_candidates else "MONITORADO")
+    aggregated = occurrence_count > 1 or len(ports) > 1 or len(services) > 1 or len(event_types) > 1
+    dedup_key = base_alert.get("dedup_key") or alert_signature(base_alert)
+    event_id = stable_alert_instance_id(aggregation_key, first_seen_epoch)
+
+    return {
+        "event_id": event_id,
+        "aggregation_key": aggregation_key,
+        "dedup_key": dedup_key,
+        "occurrence_count": occurrence_count,
+        "first_seen": epoch_to_iso(first_seen_epoch),
+        "last_seen": epoch_to_iso(last_seen_epoch),
+        "aggregated": aggregated,
+        "ports": ports,
+        "services": services,
+        "event_types": event_types,
+        "max_risk": max_risk,
+        "threat_category": threat_item.get("threat_category"),
+        "threat_description": threat_item.get("threat_description"),
+        "threat_reputation_score": threat_item.get("threat_reputation_score"),
+        "threat_source": threat_item.get("threat_source"),
+        "simulated_block": simulated_block,
+        "action_soc": action_soc,
+        "status": status,
+        "window_seconds": ALERT_AGGREGATION_WINDOW_SECONDS,
+        "rate_limit_window_seconds": ALERT_RATE_LIMIT_WINDOW_SECONDS,
+        "dedup_window_seconds": ALERT_DEDUP_WINDOW_SECONDS,
+    }
+
+
+def normalize_aggregate_entry(entry):
+    normalized = dict(entry)
+    normalized["seen_at"] = float(normalized.get("seen_at", time.time()))
+    normalized["port"] = normalize_port(normalized.get("port"))
+    normalized["risk"] = int(normalized.get("risk") or 0)
+    normalized["service"] = str(normalized.get("service") or "unknown").lower()
+    normalized["event_type"] = str(normalized.get("event_type") or "unknown").upper()
+    normalized["simulated_block"] = bool(normalized.get("simulated_block"))
+    normalized["threat_intel_match"] = bool(normalized.get("threat_intel_match"))
+    return normalized
+
+
+class InMemoryCorrelationStore:
+    def __init__(self, window_seconds):
+        self.window_seconds = window_seconds
+        self.ip_events = defaultdict(lambda: deque())
+        self.alert_buckets = defaultdict(lambda: deque())
+
+    def add_event(self, ip, event):
+        now = event["seen_at"]
+        events = self.ip_events[ip]
+        while events and now - events[0]["seen_at"] > self.window_seconds:
+            events.popleft()
+        events.append(event)
+        return list(events)
+
+    def record_aggregate(self, aggregation_key, status, alert):
+        now = float(alert["seen_at"])
+        bucket = self.alert_buckets[aggregation_key]
+        while bucket and now - bucket[0]["seen_at"] > ALERT_AGGREGATION_WINDOW_SECONDS:
+            bucket.popleft()
+        bucket.append(normalize_aggregate_entry(alert))
+        return summarize_bucket(aggregation_key, status, list(bucket), alert)
+
+
+class RedisCorrelationStore:
+    def __init__(self, redis_url, window_seconds):
+        parsed = urlparse(redis_url)
+        self.host = parsed.hostname or "redis"
+        self.port = parsed.port or 6379
+        self.db = int((parsed.path or "/0").strip("/") or 0)
+        self.window_seconds = window_seconds
+        self.key_prefix = "sentinela:rule_engine:events:"
+        self.aggregate_prefix = "sentinela:rule_engine:alerts:"
+        self.timeout = 0.8
+        self._select_db()
+
+    def _encode_command(self, *parts):
+        encoded = [str(part).encode("utf-8") for part in parts]
+        payload = f"*{len(encoded)}\r\n".encode("ascii")
+        for part in encoded:
+            payload += f"${len(part)}\r\n".encode("ascii") + part + b"\r\n"
+        return payload
+
+    def _read_line(self, sock):
+        data = b""
+        while not data.endswith(b"\r\n"):
+            chunk = sock.recv(1)
+            if not chunk:
+                raise ConnectionError("conexão Redis encerrada")
+            data += chunk
+        return data[:-2]
+
+    def _read_response(self, sock):
+        marker = sock.recv(1)
+        if not marker:
+            raise ConnectionError("resposta Redis vazia")
+        if marker == b"+":
+            return self._read_line(sock).decode("utf-8")
+        if marker == b"-":
+            raise RuntimeError(self._read_line(sock).decode("utf-8"))
+        if marker == b":":
+            return int(self._read_line(sock))
+        if marker == b"$":
+            length = int(self._read_line(sock))
+            if length == -1:
+                return None
+            payload = b""
+            while len(payload) < length:
+                payload += sock.recv(length - len(payload))
+            sock.recv(2)
+            return payload.decode("utf-8")
+        raise RuntimeError(f"resposta Redis não suportada: {marker!r}")
+
+    def _execute(self, *parts):
+        with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+            if self.db:
+                sock.sendall(self._encode_command("SELECT", self.db))
+                self._read_response(sock)
+            sock.sendall(self._encode_command(*parts))
+            return self._read_response(sock)
+
+    def _select_db(self):
+        self._execute("PING")
+
+    def add_event(self, ip, event):
+        key = f"{self.key_prefix}{ip}"
+        now = event["seen_at"]
+        raw_events = self._execute("GET", key)
+        events = json.loads(raw_events) if raw_events else []
+        events = [item for item in events if now - float(item.get("seen_at", 0)) <= self.window_seconds]
+        events.append(event)
+        self._execute("SET", key, json.dumps(events, ensure_ascii=False), "EX", self.window_seconds * 2)
+        return events
+
+    def record_aggregate(self, aggregation_key, status, alert):
+        key = f"{self.aggregate_prefix}{aggregation_key}"
+        now = float(alert["seen_at"])
+        raw_bucket = self._execute("GET", key)
+        entries = json.loads(raw_bucket) if raw_bucket else []
+        entries = [normalize_aggregate_entry(item) for item in entries if now - float(item.get("seen_at", 0)) <= ALERT_AGGREGATION_WINDOW_SECONDS]
+        entries.append(normalize_aggregate_entry(alert))
+        self._execute("SET", key, json.dumps(entries, ensure_ascii=False), "EX", ALERT_AGGREGATION_WINDOW_SECONDS * 2)
+        return summarize_bucket(aggregation_key, status, entries, alert)
+
+
+def create_state_store():
+    if REDIS_STATE_ENABLED:
+        try:
+            store = RedisCorrelationStore(REDIS_URL, STATE_WINDOW_SECONDS)
+            log_json("INFO", "State store Redis habilitado", redis_url=REDIS_URL)
+            return store
+        except Exception as exc:
+            log_json("WARN", "Redis indisponível; usando state store em memória", error=str(exc))
+    return InMemoryCorrelationStore(STATE_WINDOW_SECONDS)
+
+
+STATE_STORE = create_state_store()
 
 
 def load_rules():
@@ -76,25 +335,16 @@ def normalize_port(port):
         return None
 
 
-def prune_state(ip, now):
-    events = ip_events[ip]
-    while events and now - events[0]["seen_at"] > STATE_WINDOW_SECONDS:
-        events.popleft()
-    return events
-
-
 def update_state(log):
     ip = log["ip"]
     now = time.time()
-    events = prune_state(ip, now)
     current = {
         "seen_at": now,
         "event_type": normalize_event_type(log),
         "port": normalize_port(log.get("port")),
         "service": str(log.get("service") or "unknown").upper(),
     }
-    events.append(current)
-    return list(events)
+    return STATE_STORE.add_event(ip, current)
 
 
 def event_type_matches(item_event_type, condition):
@@ -329,32 +579,74 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
     threat_intel_match = threat is not None
     event_type = normalize_event_type(log)
     port = normalize_port(log.get("port"))
-    service = log.get("service") or "unknown"
+    service = str(log.get("service") or "unknown").lower()
+    seen_at = parse_epoch(log.get("ts") or log.get("timestamp") or time.time())
+    ts_value = epoch_to_iso(seen_at)
 
-    return {
+    base_alert = {
         "event_id": event_id,
-        "ts": log.get("ts") or log.get("timestamp") or now_iso(),
         "ip": log["ip"],
         "status": status,
-        "risco": risk,
-        "score_final": risk,
+        "risk": risk,
+        "seen_at": seen_at,
+        "port": port,
+        "service": service,
+        "event_type": event_type,
+        "threat_intel_match": threat_intel_match,
+        "threat_category": threat.get("category") if threat else None,
+        "threat_description": threat.get("description") if threat else None,
+        "threat_reputation_score": threat.get("reputation_score") if threat else None,
+        "threat_source": threat.get("source") if threat else None,
+        "simulated_block": simulated_block,
+        "action_soc": "BLOQUEIO SIMULADO" if simulated_block else ("INVESTIGANDO" if risk >= 70 or threat_intel_match else "MONITORADO"),
+        "dedup_key": alert_signature({
+            "ip": log["ip"],
+            "status": status,
+            "event_type": event_type,
+            "port": port,
+            "threat_category": threat.get("category") if threat else None,
+        }),
+    }
+
+    aggregation_key = alert_aggregation_key(base_alert)
+    aggregate_state = STATE_STORE.record_aggregate(aggregation_key, status, base_alert)
+
+    return {
+        "event_id": aggregate_state["event_id"],
+        "ts": ts_value,
+        "ip": log["ip"],
+        "status": status,
+        "risco": max(risk, aggregate_state["max_risk"]),
+        "score_final": max(risk, aggregate_state["max_risk"]),
         "service": service,
         "port": port,
         "event_type": event_type,
         "ip_event_count": len(events),
         "risk_reasons": risk_reasons,
         "threat_intel_match": threat_intel_match,
-        "threat_category": threat.get("category") if threat else None,
-        "threat_description": threat.get("description") if threat else None,
-        "threat_reputation_score": threat.get("reputation_score") if threat else None,
-        "threat_source": threat.get("source") if threat else None,
+        "threat_category": aggregate_state["threat_category"],
+        "threat_description": aggregate_state["threat_description"],
+        "threat_reputation_score": aggregate_state["threat_reputation_score"],
+        "threat_source": aggregate_state["threat_source"],
         "correlation_window_seconds": STATE_WINDOW_SECONDS,
         "correlation_key": correlation_key,
         "correlation_reason": correlation_reason,
         "auto_response": auto_response,
-        "simulated_block": simulated_block,
+        "action_soc": aggregate_state["action_soc"],
+        "simulated_block": simulated_block or aggregate_state["simulated_block"],
         "should_blacklist": simulated_block,
         "raw_event": log,
+        "occurrence_count": aggregate_state["occurrence_count"],
+        "first_seen": aggregate_state["first_seen"],
+        "last_seen": aggregate_state["last_seen"],
+        "aggregated": aggregate_state["aggregated"],
+        "ports": aggregate_state["ports"],
+        "services": aggregate_state["services"],
+        "event_types": aggregate_state["event_types"],
+        "aggregation_key": aggregate_state["aggregation_key"],
+        "dedup_key": aggregate_state["dedup_key"],
+        "rate_limit_window_seconds": aggregate_state["rate_limit_window_seconds"],
+        "dedup_window_seconds": aggregate_state["dedup_window_seconds"],
     }
 
 
@@ -426,6 +718,8 @@ def process_log(log, producer, rules):
         port=alert["port"],
         event_type=alert["event_type"],
         ip_event_count=alert["ip_event_count"],
+        occurrence_count=alert["occurrence_count"],
+        aggregated=alert["aggregated"],
         threat_intel_match=alert["threat_intel_match"],
         simulated_block=simulated_block,
         threat_source=alert["threat_source"],

@@ -82,7 +82,16 @@ def ensure_schema(conn):
                 correlation_key TEXT,
                 correlation_reason TEXT,
                 auto_response TEXT DEFAULT 'none',
+                action_soc TEXT,
                 simulated_block BOOLEAN DEFAULT FALSE,
+                is_demo BOOLEAN DEFAULT FALSE,
+                occurrence_count INTEGER DEFAULT 1,
+                first_seen TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                last_seen TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                aggregated BOOLEAN DEFAULT FALSE,
+                ports JSONB,
+                services JSONB,
+                event_types JSONB,
                 raw_event JSONB
             )
             """
@@ -103,7 +112,16 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_key TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_reason TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS auto_response TEXT DEFAULT 'none'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS action_soc TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS simulated_block BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS occurrence_count INTEGER DEFAULT 1")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS aggregated BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS ports JSONB")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS services JSONB")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS event_types JSONB")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS raw_event JSONB")
         cur.execute(
             """
@@ -164,8 +182,11 @@ def persist_alert(conn, alert):
                 threat_intel_match, threat_category, threat_description,
                 threat_reputation_score, threat_source, correlation_window_seconds,
                 correlation_key, correlation_reason,
-                auto_response,
-                simulated_block, raw_event
+                auto_response, action_soc,
+                simulated_block, is_demo,
+                occurrence_count, first_seen, last_seen, aggregated,
+                ports, services, event_types,
+                raw_event
             )
             VALUES (
                 %(event_id)s, %(ip)s, %(status)s, %(risco)s, %(score_final)s,
@@ -176,10 +197,44 @@ def persist_alert(conn, alert):
                 %(threat_category)s, %(threat_description)s,
                 %(threat_reputation_score)s, %(threat_source)s,
                 %(correlation_window_seconds)s, %(correlation_key)s,
-                %(correlation_reason)s, %(auto_response)s,
-                %(simulated_block)s, %(raw_event)s::jsonb
+                %(correlation_reason)s, %(auto_response)s, %(action_soc)s,
+                %(simulated_block)s, %(is_demo)s,
+                %(occurrence_count)s, %(first_seen)s, %(last_seen)s, %(aggregated)s,
+                %(ports)s::jsonb, %(services)s::jsonb, %(event_types)s::jsonb,
+                %(raw_event)s::jsonb
             )
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT (event_id) DO UPDATE SET
+                ip = EXCLUDED.ip,
+                status = EXCLUDED.status,
+                risco = EXCLUDED.risco,
+                score_final = EXCLUDED.score_final,
+                ts = EXCLUDED.ts,
+                "timestamp" = EXCLUDED."timestamp",
+                service = EXCLUDED.service,
+                port = EXCLUDED.port,
+                event_type = EXCLUDED.event_type,
+                ip_event_count = EXCLUDED.ip_event_count,
+                risk_reasons = EXCLUDED.risk_reasons,
+                threat_intel_match = EXCLUDED.threat_intel_match,
+                threat_category = EXCLUDED.threat_category,
+                threat_description = EXCLUDED.threat_description,
+                threat_reputation_score = EXCLUDED.threat_reputation_score,
+                threat_source = EXCLUDED.threat_source,
+                correlation_window_seconds = EXCLUDED.correlation_window_seconds,
+                correlation_key = EXCLUDED.correlation_key,
+                correlation_reason = EXCLUDED.correlation_reason,
+                auto_response = EXCLUDED.auto_response,
+                action_soc = EXCLUDED.action_soc,
+                simulated_block = EXCLUDED.simulated_block,
+                is_demo = EXCLUDED.is_demo,
+                occurrence_count = EXCLUDED.occurrence_count,
+                first_seen = EXCLUDED.first_seen,
+                last_seen = EXCLUDED.last_seen,
+                aggregated = EXCLUDED.aggregated,
+                ports = EXCLUDED.ports,
+                services = EXCLUDED.services,
+                event_types = EXCLUDED.event_types,
+                raw_event = EXCLUDED.raw_event
             """,
             {
                 "event_id": event_id,
@@ -202,7 +257,16 @@ def persist_alert(conn, alert):
                 "correlation_key": alert.get("correlation_key"),
                 "correlation_reason": alert.get("correlation_reason"),
                 "auto_response": alert.get("auto_response", "none"),
+                "action_soc": alert.get("action_soc"),
                 "simulated_block": bool(alert.get("simulated_block", False)),
+                "is_demo": bool(alert.get("is_demo", False)),
+                "occurrence_count": int(alert.get("occurrence_count", 1)),
+                "first_seen": alert.get("first_seen") or alert.get("ts"),
+                "last_seen": alert.get("last_seen") or alert.get("ts"),
+                "aggregated": bool(alert.get("aggregated", False)),
+                "ports": json.dumps(alert.get("ports", []), ensure_ascii=False),
+                "services": json.dumps(alert.get("services", []), ensure_ascii=False),
+                "event_types": json.dumps(alert.get("event_types", []), ensure_ascii=False),
                 "raw_event": json.dumps(alert.get("raw_event", alert), ensure_ascii=False),
             },
         )
