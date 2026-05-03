@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: sentinela-dashboard-api
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - dashboard_api:5000
+    authorization:
+      type: X-SENTINELA-TOKEN
+      credentials: sentinela-demo-token

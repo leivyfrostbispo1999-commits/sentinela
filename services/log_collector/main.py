@@ -1,14 +1,18 @@
 import json
+import os
 import random
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 
 from kafka import KafkaProducer
 
 
-KAFKA_BOOTSTRAP_SERVERS = ["localhost:9092"]
-RAW_LOGS_TOPIC = "raw_logs"
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
+EVENT_INTERVAL_SECONDS = float(os.getenv("EVENT_INTERVAL_SECONDS", "1.2"))
+MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
 
 IPS = [
     "192.168.1.45",
@@ -39,7 +43,12 @@ def log_json(level, message, **fields):
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
+def backoff_delay(attempt):
+    return min(MAX_BACKOFF_SECONDS, 1.5 * (2 ** min(attempt, 4)))
+
+
 def create_producer():
+    attempt = 0
     while True:
         try:
             producer = KafkaProducer(
@@ -49,14 +58,17 @@ def create_producer():
             log_json("INFO", "Kafka conectado", topic=RAW_LOGS_TOPIC)
             return producer
         except Exception as exc:
-            log_json("WARN", "Aguardando Kafka", error=str(exc))
-            time.sleep(3)
+            delay = backoff_delay(attempt)
+            log_json("WARN", "Aguardando Kafka", error=str(exc), retry_in_seconds=delay)
+            time.sleep(delay)
+            attempt += 1
 
 
 def build_event():
     ip = random.choice(IPS)
     event_choice = random.random()
     base_event = {
+        "event_id": str(uuid.uuid4()),
         "ts": now_iso(),
         "timestamp": time.time(),
         "ip": ip,
@@ -118,12 +130,13 @@ def run():
                 "INFO",
                 "Evento publicado",
                 topic=RAW_LOGS_TOPIC,
+                event_id=event["event_id"],
                 ip=event["ip"],
                 event_type=event["event_type"],
                 service=event["service"],
                 port=event["port"],
             )
-            time.sleep(1.2)
+            time.sleep(EVENT_INTERVAL_SECONDS)
         except Exception as exc:
             log_json("ERROR", "Falha ao publicar evento", error=str(exc))
             producer = create_producer()

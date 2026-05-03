@@ -1,8 +1,2 @@
-<<<<<<< HEAD
 psycopg2-binary
-confluent-kafka
-=======
-confluent-kafka
-psycopg2-binary
-jsonschema
->>>>>>> f33ed383d8e88d290a27dd7885af588db7e1ce40
+kafka-python

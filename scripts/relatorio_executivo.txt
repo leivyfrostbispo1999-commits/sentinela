@@ -1,0 +1,37 @@
+SENTINELA SOC 4.0 - RELATORIO EXECUTIVO
+
+1. Visao geral do projeto
+O SENTINELA SOC 4.0 e um mini-SIEM tecnico para demonstrar coleta, processamento, correlacao, enriquecimento e visualizacao de eventos de seguranca em tempo real. O projeto simula um ambiente SOC com pipeline baseado em Kafka, persistencia em PostgreSQL, API Flask e dashboard web em dark mode.
+
+2. Arquitetura
+A arquitetura e composta por simulator/log_collector, Kafka, rule_engine, alert_sink, PostgreSQL, dashboard_api e dashboard_web. O simulator e o log_collector publicam eventos em raw_logs. O rule_engine consome raw_logs, calcula risco, aplica threat intelligence local, correlaciona eventos por IP e publica alertas em security_alerts. O alert_sink consome security_alerts e persiste os alertas no PostgreSQL. A dashboard_api expoe /alertas e o dashboard_web consome esse endpoint.
+
+3. Fluxo de dados
+O fluxo principal e:
+simulator/log_collector -> Kafka raw_logs -> rule_engine -> Kafka security_alerts -> alert_sink -> PostgreSQL -> dashboard_api -> dashboard_web.
+Cada alerta preserva event_id, ip, event_type, port, service, status, risco, timestamp, campos de threat intelligence e simulated_block.
+
+4. Como o Kafka e usado
+Kafka atua como barramento de eventos. O topico raw_logs desacopla geradores de eventos do motor de deteccao. O topico security_alerts desacopla o rule_engine da persistencia. Isso permite evoluir coleta, deteccao e armazenamento de forma independente, mantendo tolerancia a falhas e processamento assincrono.
+
+5. Como a deteccao funciona
+O rule_engine classifica eventos como trafego normal, port scan, brute force, atividade suspeita, campanha hostil, ataque multiestagio ou IOC detectado. A correlacao e feita em memoria por IP dentro de uma janela curta. Um port scan seguido de brute force vira ATAQUE MULTIETAPA com risco minimo 97. Muitas tentativas do mesmo IP viram CAMPANHA HOSTIL com risco minimo 95.
+
+6. Como a threat intel funciona
+O arquivo services/rule_engine/threat_intel.py contem uma base local simulada de IPs maliciosos. Cada IP possui reputation_score, categoria e descricao. Quando um IP aparece nessa base, o rule_engine marca threat_intel_match=true, adiciona categoria e descricao, eleva o risco e classifica o alerta como IOC DETECTADO com risco minimo 98.
+
+7. Como o bloqueio simulado funciona
+O bloqueio real permanece desativado. ENABLE_BLOCK deve continuar false e o projeto nunca executa iptables real. Quando risco >= 95, status critico ou threat_intel_match=true, o alerta recebe simulated_block=true e auto_response=simulated_block. O dashboard exibe a acao SOC BLOQUEIO SIMULADO.
+
+8. Pontos fortes tecnicos
+- Pipeline orientado a eventos com Kafka.
+- Contratos JSON preservados entre servicos.
+- Enriquecimento local com threat intelligence.
+- Correlacao em tempo real por IP sem dependencia de banco.
+- Scoring de risco combinando tipo de evento, frequencia, sequencia, IOC e porta sensivel.
+- Migracao segura de schema com ALTER TABLE IF NOT EXISTS.
+- Dashboard SOC responsivo com grafico, ranking, feed e mapa global simulado.
+- Resposta automatizada segura por simulacao, sem impacto real em rede.
+
+9. Como apresentar em entrevista
+Apresente o projeto como uma demonstracao pratica de arquitetura SOC/SIEM. Comece pelo fluxo Kafka, explique o desacoplamento dos topicos, mostre como o rule_engine transforma logs brutos em alertas enriquecidos e destaque a diferenca entre deteccao simples e correlacao multiestagio. Em seguida, mostre o dashboard: threat level, ranking de IPs, mapa global, IOC detectado e bloqueio simulado. Finalize explicando que o bloqueio real foi mantido desativado por seguranca operacional, mas que o design ja separa decisao de resposta da execucao real.

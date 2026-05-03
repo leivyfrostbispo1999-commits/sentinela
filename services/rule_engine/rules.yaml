@@ -1,0 +1,81 @@
+rules:
+  - name: ataque_multi_etapa
+    enabled: true
+    priority: 80
+    description: PORT_SCAN seguido de BRUTE_FORCE dentro da janela temporal.
+    conditions:
+      - PORT_SCAN
+      - BRUTE_FORCE
+    min_risk: 97
+    risk: 97
+    status: ATAQUE MULTIETAPA
+    tags:
+      - recon
+      - brute_force
+      - critical
+
+  - name: campanha_hostil
+    enabled: true
+    priority: 70
+    description: Alta frequência de eventos do mesmo IP dentro da janela temporal.
+    threshold: 7
+    window_seconds: 300
+    min_risk: 95
+    risk: 95
+    status: CAMPANHA HOSTIL
+    tags:
+      - frequency
+      - campaign
+      - critical
+
+  - name: brute_force_fora_do_padrao
+    enabled: true
+    priority: 95
+    description: Múltiplas falhas de login em porta sensível dentro da janela temporal.
+    conditions:
+      - event_type:
+          - BRUTE_FORCE
+          - SSH_FAILED
+        ports:
+          - 22
+          - 3389
+    threshold: 5
+    window_seconds: 300
+    min_risk: 96
+    risk: 96
+    status: BRUTE FORCE CRÍTICO
+    tags:
+      - auth
+      - brute_force
+      - critical
+
+  - name: scanner_porta_sensivel
+    enabled: true
+    priority: 50
+    description: Varredura em portas sensíveis que costuma anteceder exploração.
+    conditions:
+      - event_type:
+          - PORT_SCAN
+        sensitive_ports: true
+    threshold: 3
+    window_seconds: 300
+    min_risk: 88
+    risk: 88
+    status: PORT SCAN EM PORTA SENSÍVEL
+    tags:
+      - recon
+      - sensitive_port
+      - high
+
+  - name: regra_desativada_exemplo
+    enabled: false
+    priority: 10
+    description: Exemplo mantido para demonstrar governança de regras sem efeito operacional.
+    conditions:
+      - event_type:
+          - NORMAL
+    threshold: 1
+    min_risk: 10
+    status: REGRA DESATIVADA
+    tags:
+      - example

@@ -1,125 +1,175 @@
 services:
   kafka:
-<<<<<<< HEAD
-    image: confluentinc/cp-kafka:7.5.0
-=======
-    image: confluentinc/cp-kafka:7.5.0
->>>>>>> f33ed383d8e88d290a27dd7885af588db7e1ce40
+    image: confluentinc/cp-kafka:7.6.0
     container_name: sentinela-kafka
+    restart: unless-stopped
     ports:
-      - "9092:9092"
+      - "9092:9094"
     environment:
       KAFKA_NODE_ID: 1
-<<<<<<< HEAD
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9094,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9094 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 25s
+    networks:
+      - sentinela-net
+    mem_limit: 1g
+    cpus: "1.0"
 
-  rule-engine:
-    build: ./services/rule_engine
-    container_name: sentinela-rule-engine
-    depends_on:
-      - kafka
+  db:
+    image: postgres:15
+    container_name: sentinela-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${DB_NAME:-postgres}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-root}
+    volumes:
+      - sentinela-db-data:/var/lib/postgresql/data
+      - ./infra/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
+    networks:
+      - sentinela-net
+    mem_limit: 512m
+    cpus: "0.50"
 
-  alert-sink:
-    build: ./services/alert-sink
-    container_name: sentinela-alert-sink
+  log_collector:
+    build: ./services/log_collector
+    container_name: sentinela-log-collector
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-raw_logs}
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+    networks:
+      - sentinela-net
+    mem_limit: 256m
+    cpus: "0.25"
 
   simulator:
     build: ./services/simulator
     container_name: sentinela-simulator
-    depends_on:
-      - kafka
-
-  db:
-    image: postgres:15
-    container_name: sentinela-db
-    environment:
-      POSTGRES_PASSWORD: root
-    ports:
-      - "5432:5432"
-
-  dashboard-api:
-    build: ./services/dashboard_api
-    container_name: sentinela-dashboard-api
-    ports:
-      - "5000:5000"
-    depends_on:
-      - db
-
-  dashboard-web:
-    build: ./services/dashboard_web
-    container_name: sentinela-dashboard-web
-    ports:
-      - "80:80"
-    depends_on:
-      - dashboard-api
-=======
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
->>>>>>> f33ed383d8e88d290a27dd7885af588db7e1ce40
     restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-raw_logs}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - sentinela-net
+    mem_limit: 256m
+    cpus: "0.25"
 
-  rule-engine:
+  rule_engine:
     build: ./services/rule_engine
-<<<<<<< HEAD
     container_name: sentinela-rule-engine
-    depends_on:
-      - kafka
     restart: unless-stopped
-=======
-    container_name: sentinela-rule-engine-1
-    depends_on:
-      - kafka
-
-  alert-sink:
-    build: ./services/alert-sink
-    container_name: sentinela-alert-sink-1
-    depends_on:
-      - kafka
-
-  simulator:
-    build: ./services/simulator
-    container_name: sentinela-simulator-1
-    depends_on:
-      - kafka
-
-  db:
-    image: postgres:15
-    container_name: sentinela-db
     environment:
-      POSTGRES_PASSWORD: root
-    ports:
-      - "5432:5432"
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-raw_logs}
+      ALERTS_TOPIC: ${ALERTS_TOPIC:-security_alerts}
+      ENABLE_BLOCK: ${ENABLE_BLOCK:-false}
+      CORRELATION_WINDOW_SECONDS: ${CORRELATION_WINDOW_SECONDS:-300}
+      RULES_PATH: ${RULES_PATH:-rules.yaml}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - sentinela-net
+    mem_limit: 256m
+    cpus: "0.35"
 
-  dashboard-api:
+  alert_sink:
+    build: ./services/alert-sink
+    container_name: sentinela-alert-sink
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      ALERTS_TOPIC: ${ALERTS_TOPIC:-security_alerts}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-postgres}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-root}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - sentinela-net
+    mem_limit: 256m
+    cpus: "0.35"
+
+  dashboard_api:
     build: ./services/dashboard_api
     container_name: sentinela-dashboard-api
+    restart: unless-stopped
     ports:
       - "5000:5000"
+    environment:
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-postgres}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-root}
+      SENTINELA_API_TOKEN: ${SENTINELA_API_TOKEN:-sentinela-demo-token}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
+    networks:
+      - sentinela-net
+    mem_limit: 256m
+    cpus: "0.35"
 
-  dashboard-web:
+  dashboard_web:
     build: ./services/dashboard_web
     container_name: sentinela-dashboard-web
+    restart: unless-stopped
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
-      - dashboard-api
->>>>>>> f33ed383d8e88d290a27dd7885af588db7e1ce40
+      dashboard_api:
+        condition: service_healthy
+    networks:
+      - sentinela-net
+    mem_limit: 128m
+    cpus: "0.20"
+
+networks:
+  sentinela-net:
+    driver: bridge
+
+volumes:
+  sentinela-db-data:
