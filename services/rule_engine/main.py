@@ -9,7 +9,7 @@ import psycopg2
 from kafka import KafkaConsumer
 
 
-KAFKA_BOOTSTRAP_SERVERS = ["localhost:9092"]
+KAFKA_BOOTSTRAP_SERVERS = ["kafka:9092"]
 RAW_LOGS_TOPIC = "raw_logs"
 AUTO_RESPONSE_MODE = os.getenv("SENTINELA_AUTO_RESPONSE_MODE", "simulated").lower()
 STATE_WINDOW_SECONDS = 60
