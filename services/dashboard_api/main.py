@@ -257,7 +257,8 @@ def row_to_dict(row, columns):
 
 
 def fetch_alerts(conn):
-    demo_only = demo_mode_enabled()
+    mode = (request.args.get("mode") or "").strip().lower()
+    demo_only = mode == "demo"
     range_value = request.args.get("range", "5m")
     interval = range_to_interval(range_value)
 
@@ -268,7 +269,7 @@ def fetch_alerts(conn):
                 SELECT * FROM alertas
                 WHERE is_demo = TRUE
                 ORDER BY ts DESC
-                LIMIT 50
+                LIMIT 100
                 """
             )
         else:
@@ -277,7 +278,7 @@ def fetch_alerts(conn):
                 SELECT * FROM alertas
                 WHERE ts >= NOW() - %s::interval
                 ORDER BY ts DESC
-                LIMIT 500
+                LIMIT 100
                 """,
                 (interval,),
             )
@@ -365,7 +366,7 @@ def build_demo_alerts():
 
 def persist_demo_alerts(conn, alerts):
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM alertas WHERE is_demo = TRUE;")
+        cur.execute("DELETE FROM alertas WHERE is_demo = true;")
     conn.commit()
 
     with conn.cursor() as cur:
