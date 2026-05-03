@@ -155,7 +155,7 @@ def simulate_normal_traffic(producer):
 
 def run():
     producer = create_producer()
-    log_json("INFO", "Simulador SENTINELA 5.0 iniciado")
+    log_json("INFO", "SENTINELA simulator started")
 
     while True:
         try:

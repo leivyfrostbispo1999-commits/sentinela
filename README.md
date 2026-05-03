@@ -1,80 +1,148 @@
-# SENTINELA SOC 5.5
+# SENTINELA SOC
 
 Mini-SIEM educacional/profissional com arquitetura inspirada em ambientes reais de SOC.
 
-O SENTINELA demonstra coleta, processamento, correlação, threat intelligence, persistência, observabilidade e dashboard analítico usando Docker Compose, Kafka, Python, PostgreSQL e frontend em HTML/CSS/JS puro.
+O SENTINELA demonstra um pipeline completo de segurança: geração e coleta de eventos, ingestão via Kafka, detecção por regras, correlação temporal, Threat Intelligence, persistência em PostgreSQL, métricas Prometheus e dashboard SOC em tempo real.
 
-## Arquitetura
+Este projeto não pretende substituir plataformas como Splunk, Elastic, QRadar ou Wazuh. O objetivo é demonstrar maturidade técnica, organização de código e domínio dos componentes centrais de um pipeline SIEM moderno.
+
+## Architecture
 
 ```text
-simulator/log_collector
-  -> Kafka raw_logs
-  -> rule_engine
-  -> Kafka security_alerts
-  -> alert_sink
-  -> PostgreSQL
-  -> dashboard_api
-  -> dashboard_web
+simulator / log_collector
+        |
+        v
+Kafka topic: raw_logs
+        |
+        v
+rule_engine
+        |
+        v
+Kafka topic: security_alerts
+        |
+        v
+alert_sink
+        |
+        v
+PostgreSQL
+        |
+        v
+dashboard_api
+        |
+        v
+dashboard_web
 ```
 
-## Serviços
+## Features
 
-- `kafka`: barramento de eventos.
-- `db`: PostgreSQL para histórico de alertas.
-- `log_collector`: gerador/coletor de eventos.
-- `simulator`: simula tráfego normal, bursts, IOCs e ataques multiestágio.
-- `rule_engine`: aplica regras YAML, correlação temporal, threat intelligence e scoring.
-- `alert_sink`: persiste alertas no banco.
-- `dashboard_api`: expõe `/alertas`, `/metrics` e `/health`.
-- `dashboard_web`: dashboard SOC visual.
+- Event-driven architecture with Kafka.
+- Raw event ingestion through `raw_logs`.
+- Enriched alert publication through `security_alerts`.
+- Rule-based detection with configurable YAML rules.
+- Temporal and multidimensional correlation by IP, service, port and event type.
+- Local and simulated external Threat Intelligence.
+- Risk scoring based on event type, sensitive ports, frequency, sequence and IOC match.
+- Safe automated response using `simulated_block`.
+- PostgreSQL persistence with backward-compatible schema evolution.
+- REST API with token authentication.
+- Prometheus-compatible `/metrics` endpoint.
+- SOC dashboard with filters, search, ranking, analytics, attack map and drill-down.
 
-## Como rodar
+## Services
+
+| Service | Role |
+| --- | --- |
+| `kafka` | Event broker for raw logs and enriched alerts. |
+| `db` | PostgreSQL database for alert history. |
+| `log_collector` | Produces baseline log events into Kafka. |
+| `simulator` | Generates normal traffic, bursts, IOCs and attack sequences. |
+| `rule_engine` | Applies YAML rules, correlation, Threat Intelligence and risk scoring. |
+| `alert_sink` | Consumes enriched alerts and persists them in PostgreSQL. |
+| `dashboard_api` | Exposes alert, health and metrics endpoints. |
+| `dashboard_web` | Static SOC dashboard served by Nginx. |
+
+## Requirements
+
+- Docker
+- Docker Compose
+
+## Running Locally
 
 ```powershell
 docker compose up -d --build
+```
+
+Check containers:
+
+```powershell
 docker ps
+```
+
+Read recent logs:
+
+```powershell
 docker compose logs --tail=120
 ```
 
-Dashboard:
+Open the dashboard:
 
 ```text
 http://localhost:8080
 ```
 
-API:
+## Endpoints
+
+| Endpoint | Description | Authentication |
+| --- | --- | --- |
+| `GET /health` | API and database health check. | No |
+| `GET /alertas?range=5m` | Alerts from the selected time range. | Yes |
+| `GET /alertas?range=1h` | Alerts from the selected time range. | Yes |
+| `GET /metrics` | Prometheus-compatible metrics. | Yes |
+
+Base API URL:
 
 ```text
-http://localhost:5000/health
-http://localhost:5000/alertas?range=5m
-http://localhost:5000/metrics
+http://localhost:5000
 ```
 
-## Token de API
+Supported alert ranges:
 
-Os endpoints `/alertas` e `/metrics` exigem:
+- `5m`
+- `15m`
+- `1h`
+- `24h`
+
+## Authentication
+
+Protected endpoints accept the token using either header:
 
 ```text
 X-SENTINELA-TOKEN: sentinela-demo-token
 ```
 
-Variável de ambiente:
+or:
+
+```text
+Authorization: Bearer sentinela-demo-token
+```
+
+The token is configured with:
 
 ```text
 SENTINELA_API_TOKEN=sentinela-demo-token
 ```
 
-O dashboard já envia esse header nas chamadas `fetch`.
+The dashboard sends the token automatically in API requests.
 
-## Regras YAML
+## Detection Rules
 
-As regras ficam em:
+Rules are configured in:
 
 ```text
 services/rule_engine/rules.yaml
 ```
 
-Campos suportados:
+Supported fields:
 
 - `name`
 - `enabled`
@@ -88,80 +156,93 @@ Campos suportados:
 - `status`
 - `tags`
 
-O `rule_engine` mantém fallback caso o YAML esteja inválido.
+The rule engine ignores disabled rules, applies higher priority matches first and uses a safe fallback rule set if the YAML file is invalid.
 
-## Correlação
+## Simulated Blocking
 
-A correlação considera:
+Real blocking is intentionally disabled:
 
-- IP
-- serviço
-- porta
-- tipo de evento
-- janela temporal
+```text
+ENABLE_BLOCK=false
+```
 
-Campos gerados:
+No real firewall or `iptables` action is executed. High-risk events are marked with:
 
-- `correlation_key`
-- `correlation_reason`
-- `correlation_window_seconds`
+```text
+simulated_block=true
+```
 
-## Dashboard
+This keeps the demo safe while still showing how SOC response logic could be represented.
 
-O dashboard inclui:
+## Observability
 
-- filtros por tempo
-- busca por IP, status, event_type e service
-- filtro de criticidade
-- filtro de threat_source
-- filtro por simulated_block
-- gráficos com Chart.js
-- mapa global simulado
-- painel lateral de drill-down
+The API exposes Prometheus-format metrics at:
 
-## Métricas
+```text
+http://localhost:5000/metrics
+```
 
-O endpoint `/metrics` expõe métricas em formato Prometheus:
+Metrics include:
 
 - `sentinela_events_total`
 - `sentinela_critical_events_total`
 - `sentinela_ioc_events_total`
 - `sentinela_events_by_type_total`
 
-Arquivo de referência:
+A reference Prometheus configuration is available at:
 
 ```text
 infra/prometheus/prometheus.yml
 ```
 
-## Segurança e resposta
+## Technology Stack
 
-O projeto preserva:
+- Python
+- Flask
+- Kafka
+- PostgreSQL
+- Docker Compose
+- Nginx
+- HTML, CSS and JavaScript
+- Chart.js
+- Prometheus client library
+- YAML-based rules
+
+## Repository Structure
 
 ```text
-ENABLE_BLOCK=false
+services/
+  alert-sink/
+  dashboard_api/
+  dashboard_web/
+  log_collector/
+  rule_engine/
+  simulator/
+
+docs/
+infra/
+scripts/
+docker-compose.yml
+README.md
+.gitignore
 ```
 
-Nenhum bloqueio real é executado. A resposta automatizada é demonstrada por:
+## Honest Limitations
 
-```text
-simulated_block=true
-```
+- Kafka runs as a single broker for local demonstration.
+- Correlation state is local and in memory.
+- External Threat Intelligence is simulated for safe portfolio usage.
+- Authentication is token-based and intentionally simple.
+- There is no RBAC, multi-tenancy or production-grade identity provider.
+- There is no schema registry or formal dead-letter queue yet.
+- Prometheus is documented and configured, but not added to Compose by default.
 
-## Limitações honestas
+## Next Steps
 
-- Não é substituto de Splunk, Elastic, QRadar ou Wazuh.
-- Kafka roda em nó único no ambiente local.
-- Correlação é em memória.
-- Threat Intel externa é simulada.
-- Autenticação é token simples para demo.
-- Não há RBAC, multi-tenant, schema registry ou DLQ formal.
-
-## Próximos passos
-
-- Kafka multi-broker com partitions planejadas.
-- DLQ e validação de schema.
-- State store distribuído para correlação.
-- Migrações versionadas de banco.
-- Prometheus/Grafana em compose opcional.
-- Testes de carga com métricas de throughput e latência.
+- Add Kafka multi-broker support with planned partitions and replication.
+- Add schema validation and dead-letter topics.
+- Move correlation state to Redis, Kafka Streams or another state store.
+- Add Alembic or another versioned migration tool.
+- Add automated tests for detection and API behavior.
+- Add optional Prometheus and Grafana services to Docker Compose.
+- Add load testing with throughput, latency and consumer lag metrics.

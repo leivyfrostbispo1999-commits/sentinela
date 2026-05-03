@@ -1,85 +1,78 @@
 # Escalabilidade Kafka no SENTINELA
 
-O SENTINELA foi desenhado como um mini-SIEM educacional/profissional com arquitetura inspirada em ambientes reais de SOC. Ele não afirma processar milhões de eventos por segundo, mas usa decisões arquiteturais que permitem evoluir para volumes maiores.
+O SENTINELA foi estruturado como um mini-SIEM educacional/profissional com arquitetura inspirada em pipelines reais de SOC. Ele não afirma processar milhões de eventos por segundo. A proposta é demonstrar escolhas arquiteturais que permitem evolução controlada para cenários de maior volume.
 
-## Como escalaria para alto volume
-
-O caminho natural de escala é aumentar a capacidade do Kafka, separar responsabilidades por tópicos e escalar consumidores horizontalmente. O pipeline atual já separa logs brutos de alertas enriquecidos:
+## Pipeline Atual
 
 ```text
-simulator/log_collector -> Kafka raw_logs -> rule_engine -> Kafka security_alerts -> alert_sink -> PostgreSQL -> API/dashboard
+simulator/log_collector -> Kafka raw_logs -> rule_engine -> Kafka security_alerts -> alert_sink -> PostgreSQL -> dashboard_api -> dashboard_web
 ```
 
-Em produção, `raw_logs` receberia alto volume e `security_alerts` teria menor volume, porque contém apenas eventos já classificados ou enriquecidos.
+A separação entre logs brutos e alertas enriquecidos é intencional. O tópico `raw_logs` recebe eventos de maior volume. O tópico `security_alerts` recebe eventos já analisados, classificados e enriquecidos pelo `rule_engine`.
 
-## Partitions no Kafka
+## Partitions
 
-Para alto volume, os tópicos deveriam ter múltiplas partitions. Uma estratégia comum seria particionar por IP de origem, tenant, sensor ou hash do evento. Isso permite paralelismo real no consumo.
+Em um ambiente de maior volume, os tópicos Kafka deveriam usar múltiplas partitions. Isso permitiria paralelismo real entre consumidores e melhor absorção de picos.
 
-Exemplo conceitual:
+Estratégias possíveis de chave:
 
-- `raw_logs`: várias partitions para ingestão paralela.
-- `security_alerts`: partitions suficientes para acompanhar o throughput do `rule_engine`.
+- IP de origem.
+- Sensor de origem.
+- Tenant.
+- Hash de entidade investigada.
 
-O cuidado técnico é manter eventos do mesmo IP na mesma partition quando a correlação depende de ordem temporal por IP.
+Quando a correlação depende de ordem por IP, eventos do mesmo IP devem cair na mesma partition. Isso reduz inconsistências na análise temporal.
 
-## Consumer groups
+## Consumer Groups
 
-O `rule_engine` usa consumer group. Em produção, múltiplas instâncias poderiam consumir o tópico `raw_logs` em paralelo, desde que o número de partitions suporte esse paralelismo.
+O `rule_engine` pode escalar horizontalmente usando consumer groups. Para isso, `raw_logs` precisa ter partitions suficientes para distribuir trabalho entre instâncias.
 
-O `alert_sink` também pode escalar por consumer group, mas precisa manter idempotência no banco. O projeto já usa `event_id UUID UNIQUE` e `ON CONFLICT DO NOTHING`, o que reduz risco de duplicidade.
+O `alert_sink` também pode escalar com consumer group. Como o banco usa `event_id` único e gravação idempotente, o risco de duplicidade é reduzido.
 
 ## Backpressure
 
-Kafka ajuda a absorver picos. Se o banco ou o `rule_engine` ficarem lentos, os eventos acumulam no tópico em vez de derrubar diretamente o produtor. Em produção, seriam monitorados:
+Kafka ajuda a absorver picos quando algum componente posterior fica lento. Se o banco ou o `rule_engine` atrasarem, os eventos podem acumular no tópico em vez de derrubar diretamente os produtores.
 
-- consumer lag por grupo
-- taxa de produção e consumo
-- tempo de processamento do `rule_engine`
-- erros de escrita no PostgreSQL
-- tamanho dos lotes e latência fim a fim
+Indicadores que deveriam ser monitorados:
 
-## Retenção de eventos
+- Consumer lag por grupo.
+- Taxa de produção e consumo.
+- Latência de processamento no `rule_engine`.
+- Erros de escrita no PostgreSQL.
+- Tempo fim a fim entre ingestão e visualização.
 
-O tópico `raw_logs` deveria ter retenção maior para reprocessamento e auditoria. O tópico `security_alerts` poderia ter retenção diferente, focada em recuperação do sink e replay dos alertas.
+## Retenção
 
-Retenção em produção dependeria de custo, compliance e necessidade de investigação.
+O tópico `raw_logs` deveria ter retenção suficiente para auditoria e reprocessamento. O tópico `security_alerts` poderia ter retenção menor, focada em replay dos alertas e recuperação do `alert_sink`.
 
-## Separação entre raw_logs e security_alerts
+A política real dependeria de custo, compliance, criticidade e necessidade de investigação.
 
-A separação é intencional:
+## Escala Horizontal do Rule Engine
 
-- `raw_logs`: eventos originais, ruidosos, sem decisão final.
-- `security_alerts`: eventos enriquecidos com risco, status, threat intel, correlação e resposta simulada.
+O `rule_engine` pode ser replicado se três condições forem atendidas:
 
-Isso permite evoluir detecção sem acoplar coleta, persistência e dashboard.
+- O tópico `raw_logs` tiver partitions suficientes.
+- A chave de particionamento preservar afinidade por IP ou entidade correlacionada.
+- O estado de correlação for compatível com execução distribuída.
 
-## Escala horizontal do rule_engine
+Na versão atual, a correlação é local e em memória. Para produção, o estado deveria migrar para Redis, Kafka Streams, RocksDB ou outro state store.
 
-O `rule_engine` pode ser escalado horizontalmente se:
+## Limitações Atuais
 
-- `raw_logs` tiver partitions suficientes.
-- a chave de particionamento preservar afinidade por IP ou entidade correlacionada.
-- a correlação em memória for compatível com distribuição por partition.
-
-Para uma versão mais robusta, estado de correlação poderia ir para Redis, RocksDB, Kafka Streams ou outro state store.
-
-## Limitações atuais
-
-- Kafka está em nó único, adequado para demo local.
-- Correlação é em memória e local ao container.
+- Kafka roda em nó único.
+- Correlação é local ao container.
 - Não há schema registry.
-- Não há DLQ formal por tipo de erro.
-- PostgreSQL é único e recebe todos os alertas.
-- Dashboard e API não têm RBAC, apenas token simples para demo.
+- Não há dead-letter queue formal.
+- PostgreSQL é uma instância única.
+- A autenticação é simples e baseada em token.
 
-## Próximos passos para produção
+## Próximos Passos Para Produção
 
-- Kafka com múltiplos brokers e replication factor adequado.
-- Partitions configuradas por tópico e chave de particionamento estável.
-- Observabilidade de consumer lag.
+- Kafka com múltiplos brokers.
+- Replication factor adequado.
+- Partitions planejadas por tópico.
 - DLQ para eventos inválidos.
-- State store para correlação distribuída.
-- Migrações versionadas de banco.
-- Retenção por política operacional.
-- Testes de carga com metas realistas de throughput.
+- Schema registry ou validação formal de eventos.
+- Métricas de consumer lag.
+- State store distribuído para correlação.
+- Testes de carga com metas realistas de throughput e latência.

@@ -72,13 +72,19 @@ def range_where():
 
 
 def token_is_valid():
-    return request.headers.get("X-SENTINELA-TOKEN") == SENTINELA_API_TOKEN
+    sentinela_header = request.headers.get("X-SENTINELA-TOKEN")
+    authorization = request.headers.get("Authorization", "")
+    bearer_token = authorization.removeprefix("Bearer ").strip()
+    return sentinela_header == SENTINELA_API_TOKEN or bearer_token == SENTINELA_API_TOKEN
 
 
 def require_token():
     if token_is_valid():
         return None
-    return jsonify({"error": "token inválido ou ausente", "header": "X-SENTINELA-TOKEN"}), 401
+    return jsonify({
+        "error": "token inválido ou ausente",
+        "headers": ["X-SENTINELA-TOKEN", "Authorization: Bearer <token>"],
+    }), 401
 
 
 @app.route("/")
