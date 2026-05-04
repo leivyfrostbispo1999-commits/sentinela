@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SENTINELA SOC 5.6</title>
+    <title>SENTINELA SOC 6.0</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -86,6 +86,27 @@
             font-weight: 700;
         }
         .button { padding: 0 14px; cursor: pointer; color: var(--cyan); }
+        .mode-toggle {
+            display: inline-grid;
+            grid-template-columns: 1fr 1fr;
+            min-height: 38px;
+            border: 1px solid rgba(101, 231, 255, 0.35);
+            border-radius: 7px;
+            overflow: hidden;
+            background: rgba(101, 231, 255, 0.06);
+        }
+        .mode-button {
+            border: 0;
+            padding: 0 12px;
+            background: transparent;
+            color: var(--muted);
+            font-weight: 900;
+            cursor: pointer;
+        }
+        .mode-button.active {
+            background: rgba(101, 231, 255, 0.16);
+            color: var(--cyan);
+        }
         .button.demo {
             border-color: rgba(255, 64, 93, 0.62);
             background: rgba(255, 64, 93, 0.16);
@@ -118,7 +139,7 @@
         }
         .critical-banner.show { display: block; }
 
-        .cards { display: grid; grid-template-columns: repeat(5, minmax(160px, 1fr)); gap: 14px; margin: 16px 0; }
+        .cards { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 14px; margin: 16px 0; }
         .card { padding: 16px; min-height: 110px; }
         .card-label { color: var(--muted); font-size: 0.76rem; font-weight: 900; text-transform: uppercase; }
         .card-value { margin-top: 12px; color: var(--cyan); font-family: Consolas, monospace; font-size: 2.45rem; font-weight: 900; }
@@ -390,6 +411,12 @@
             font-family: Consolas, monospace;
             font-size: 0.86rem;
         }
+        .ip-link {
+            color: var(--cyan);
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            cursor: pointer;
+        }
 
         .map-stage {
             position: relative;
@@ -494,6 +521,10 @@
         .ti { color: var(--red); font-weight: 800; }
         .clickable-row { cursor: pointer; }
         .clickable-row:hover { background: rgba(101, 231, 255, 0.08); }
+        .replay-row { background: rgba(255, 64, 93, 0.07); }
+        .history-mode .incident-panel { display: none !important; }
+        .history-mode .map-column { display: none; }
+        .history-mode .grid { grid-template-columns: 1fr; grid-template-areas: "analytics" "feed"; }
 
         .drawer-backdrop {
             position: fixed;
@@ -544,6 +575,27 @@
             text-transform: uppercase;
             margin-bottom: 4px;
         }
+        .incident-form {
+            display: grid;
+            gap: 10px;
+        }
+        .incident-form textarea,
+        .incident-form input {
+            width: 100%;
+            min-height: 38px;
+            border: 1px solid rgba(101, 231, 255, 0.24);
+            border-radius: 6px;
+            background: rgba(5, 8, 15, 0.7);
+            color: var(--text);
+            padding: 9px;
+            font: inherit;
+        }
+        .incident-form textarea { min-height: 92px; resize: vertical; }
+        .notice {
+            margin-top: 10px;
+            color: var(--yellow);
+            font-weight: 800;
+        }
 
         @keyframes attackLine {
             0% { opacity: 0; clip-path: inset(0 100% 0 0); }
@@ -587,8 +639,9 @@
     <main class="shell">
         <header>
             <section>
-                <h1>SENTINELA SOC 5.6</h1>
-                <p class="subtitle">Mini-SIEM educacional/profissional com maturidade de produção: regras YAML, correlação multidimensional, autenticação simples, observabilidade e analytics.</p>
+                <h1>SENTINELA SOC 6.0</h1>
+                <p class="subtitle">Plataforma SOC local com incidentes persistidos, correlação multi-IP, MITRE ATT&CK, investigação por entidade e relatórios exportáveis.</p>
+                <p class="notice">Ambiente local de demonstração. Nenhuma ação real de ataque ou bloqueio é executada.</p>
             </section>
             <aside class="header-status">
                 <div class="toolbar">
@@ -616,6 +669,10 @@
                         <option value="true">Com simulated_block</option>
                         <option value="false">Sem simulated_block</option>
                     </select>
+                    <div class="mode-toggle" aria-label="Modo do dashboard">
+                        <button class="mode-button active" id="demoModeButton" type="button">DEMO</button>
+                        <button class="mode-button" id="historyModeButton" type="button">HISTÓRICO</button>
+                    </div>
                     <input class="search" id="searchInput" type="search" placeholder="Buscar IP, status, tipo de evento ou serviço">
                     <button class="button demo" id="simulateAttackButton" type="button">Simular Ataque</button>
                     <button class="button" id="refreshButton" type="button">Atualizar</button>
@@ -629,11 +686,12 @@
         <div class="critical-banner" id="criticalBanner">INCIDENTE CRÍTICO EM ANDAMENTO</div>
 
         <section class="cards">
-            <article class="card"><div class="card-label">Total de eventos</div><div class="card-value" id="totalEventos">0</div></article>
-            <article class="card"><div class="card-label">Eventos críticos</div><div class="card-value" id="eventosCriticos">0</div></article>
-            <article class="card"><div class="card-label">IPs únicos</div><div class="card-value" id="ipsUnicos">0</div></article>
-            <article class="card"><div class="card-label">Bloqueios simulados</div><div class="card-value" id="bloqueios">0</div></article>
-            <article class="card"><div class="card-label">Correspondências de Threat Intel</div><div class="card-value" id="tiMatches">0</div></article>
+            <article class="card"><div class="card-label" id="cardLabelTotal">Incidentes abertos</div><div class="card-value" id="totalEventos">0</div></article>
+            <article class="card"><div class="card-label" id="cardLabelCritical">Incidentes críticos</div><div class="card-value" id="eventosCriticos">0</div></article>
+            <article class="card"><div class="card-label" id="cardLabelIps">IPs envolvidos</div><div class="card-value" id="ipsUnicos">0</div></article>
+            <article class="card"><div class="card-label" id="cardLabelBlocks">Maior score</div><div class="card-value" id="bloqueios">0</div></article>
+            <article class="card"><div class="card-label" id="cardLabelTi">MITRE dominante</div><div class="card-value" id="tiMatches">N/D</div></article>
+            <article class="card"><div class="card-label">Último replay</div><div class="card-value" id="lastReplayCard">N/D</div></article>
         </section>
 
         <section class="panel incident-panel" id="incidentPanel">
@@ -662,6 +720,37 @@
             </div>
             <div class="incident-progress" id="incidentProgress"></div>
             <div class="timeline" id="incidentTimeline"></div>
+        </section>
+
+        <section class="panel" id="incidentsPanel" style="margin-bottom:16px;">
+            <div class="panel-head">
+                <div>
+                    <h2 class="panel-title">Incidentes</h2>
+                    <p class="muted">Incidentes persistidos com correlação por IP, usuário, serviço, MITRE, replay e janela temporal.</p>
+                </div>
+                <div class="live" id="incidentsStatus">CARREGANDO</div>
+            </div>
+            <div class="toolbar" style="margin-bottom:12px;">
+                <select class="select" id="incidentStatusFilter" aria-label="Filtro de status de incidente">
+                    <option value="all">Todos os status</option>
+                    <option value="NEW">NEW</option>
+                    <option value="INVESTIGATING">INVESTIGATING</option>
+                    <option value="CONTAINED">CONTAINED</option>
+                    <option value="CONTAINED">CONTAINED</option>
+                    <option value="RESOLVED">RESOLVED</option>
+                    <option value="FALSE_POSITIVE">FALSE_POSITIVE</option>
+                    <option value="CLOSED">CLOSED</option>
+                </select>
+                <select class="select" id="incidentSeverityFilter" aria-label="Filtro de severidade de incidente">
+                    <option value="all">Todas as severidades</option>
+                    <option value="CRITICAL">CRITICAL</option>
+                    <option value="HIGH">HIGH</option>
+                    <option value="MEDIUM">MEDIUM</option>
+                    <option value="LOW">LOW</option>
+                </select>
+                <input class="search" id="incidentSearchInput" type="search" placeholder="Buscar IP, MITRE ou incident_id">
+            </div>
+            <div class="rank-list" id="incidentsList"></div>
         </section>
 
         <section class="grid">
@@ -701,7 +790,7 @@
                 <div class="panel-head">
                     <div>
                         <h2 class="panel-title">Mapa Global de Ataques</h2>
-                        <p class="muted">Origens simuladas com país, cidade, tooltip e conexões simultâneas</p>
+                        <p class="muted">Mapa com origens simuladas para fins educacionais.</p>
                     </div>
                     <div class="live">MAPA ENRIQUECIDO</div>
                 </div>
@@ -735,14 +824,14 @@
                     <table>
                         <thead>
                             <tr>
-                                <th>Hora</th>
-                                <th>IP</th>
-                                <th>Status</th>
-                                <th>Risco</th>
-                                <th>Consolidação</th>
-                                <th>Porta/Serviço</th>
-                                <th>Inteligência de Ameaças</th>
-                                <th>Ação SOC</th>
+                                <th id="feedHeadTime">Hora</th>
+                                <th>Origem -> Alvo</th>
+                                <th id="feedHeadStatus">Severidade</th>
+                                <th id="feedHeadRisk">Score</th>
+                                <th id="feedHeadConsolidation">Correlação</th>
+                                <th id="feedHeadService">MITRE / Regra</th>
+                                <th id="feedHeadIntel">Evidência</th>
+                                <th id="feedHeadAction">Playbook</th>
                             </tr>
                         </thead>
                         <tbody id="feedBody"><tr><td colspan="8">Carregando eventos...</td></tr></tbody>
@@ -767,6 +856,11 @@
     <script>
         const API_URL = 'http://localhost:5000/alertas';
         const DEMO_URL = 'http://localhost:5000/demo/simulate-attack';
+        const INCIDENTS_URL = 'http://localhost:5000/incidents';
+        const INVESTIGATION_URL = 'http://localhost:5000/investigation/ip';
+        const REPORT_URL = 'http://localhost:5000/reports/incident';
+        const RULES_URL = 'http://localhost:5000/rules';
+        const METRICS_URL = 'http://localhost:5000/metrics';
         const API_TOKEN = 'sentinela-demo-token';
         const origins = [
             { country: 'Rússia', city: 'Moscow', ip: '45.67.89.12', x: 58, y: 28 },
@@ -787,14 +881,16 @@
         let typeChart;
         let incidentTimeline = [];
         let demoOnlyMode = false;
+        let dashboardMode = 'demo';
 
         const el = id => document.getElementById(id);
         const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-        const risk = alert => Number.parseInt(alert.risco, 10) || 0;
+        const risk = alert => Number.parseInt(alert.score_breakdown?.final_score ?? alert.score_final ?? alert.risco ?? alert.threat_score, 10) || 0;
         const authHeaders = { 'X-SENTINELA-TOKEN': API_TOKEN };
 
         function getSeverity(riskValue) {
-            if (riskValue >= 80) return 'critical';
+            if (riskValue >= 90) return 'critical';
+            if (riskValue >= 70) return 'high';
             if (riskValue >= 50) return 'medium';
             return 'low';
         }
@@ -803,6 +899,7 @@
             switch (severityValue) {
                 case 'low': return '#22c55e';
                 case 'medium': return '#facc15';
+                case 'high': return '#ff9f43';
                 case 'critical':
                 default: return '#ef4444';
             }
@@ -810,8 +907,7 @@
 
         function normalizeSeverityLabel(value) {
             const normalized = String(value || '').toLowerCase();
-            if (normalized === 'low' || normalized === 'medium' || normalized === 'critical') return normalized;
-            if (normalized === 'high') return 'critical';
+            if (normalized === 'low' || normalized === 'medium' || normalized === 'high' || normalized === 'critical') return normalized;
             return 'low';
         }
 
@@ -820,7 +916,7 @@
         }
 
         function socAction(alert) {
-            if (alert.simulated_block) return ['BLOQUEIO SIMULADO', 'bloqueio'];
+            if (alert.simulated_block) return ['BLOQUEIO RECOMENDADO', 'bloqueio'];
             if (risk(alert) >= 70 || alert.threat_intel_match || Number(alert.occurrence_count || 0) > 1) return ['INVESTIGANDO', 'investigando'];
             return ['MONITORADO', 'monitorado'];
         }
@@ -868,14 +964,35 @@
 
         function updateCards(alerts) {
             const totalOccurrences = alerts.reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
-            const criticalOccurrences = alerts.filter(a => severity(a) === 'critical').reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
-            const blockOccurrences = alerts.filter(a => a.simulated_block).reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
-            const tiOccurrences = alerts.filter(a => a.threat_intel_match).reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
+            const sortedByRisk = alerts.slice().sort((a, b) => risk(b) - risk(a));
+            const topAlert = sortedByRisk[0] || {};
+            const replayOccurrences = alerts.filter(a => a.is_replay_event || a.replay_id || a.is_demo).reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
+            const severityCounts = alerts.reduce((acc, alert) => {
+                const key = String(alert.severity || getSeverity(risk(alert))).toUpperCase();
+                acc[key] = (acc[key] || 0) + 1;
+                return acc;
+            }, {});
+            const dominantSeverity = Object.entries(severityCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'LOW';
+
+            el('cardLabelTotal').textContent = 'Incidentes abertos';
+            el('cardLabelCritical').textContent = 'Incidentes críticos';
+            el('cardLabelIps').textContent = 'IPs envolvidos';
+            el('cardLabelBlocks').textContent = 'Maior score';
+            el('cardLabelTi').textContent = 'MITRE dominante';
+
+            const uniqueIps = new Set(alerts.map(a => a.source_ip || a.ip).filter(Boolean)).size;
+            const simulatedBlocks = alerts.filter(a => a.simulated_block).length;
+            const tiOccurrences = alerts.filter(a => a.threat_intel_match).length;
             el('totalEventos').textContent = totalOccurrences;
-            el('eventosCriticos').textContent = criticalOccurrences;
-            el('ipsUnicos').textContent = new Set(alerts.map(a => a.ip).filter(Boolean)).size;
-            el('bloqueios').textContent = blockOccurrences;
-            el('tiMatches').textContent = tiOccurrences;
+            el('eventosCriticos').textContent = alerts.filter(a => String(a.severity || '').toUpperCase() === 'CRITICAL').length;
+            el('ipsUnicos').textContent = uniqueIps;
+            el('bloqueios').textContent = risk(topAlert);
+            el('tiMatches').textContent = Object.entries(alerts.reduce((acc, alert) => {
+                const key = alert.mitre_id || 'N/D';
+                acc[key] = (acc[key] || 0) + 1;
+                return acc;
+            }, {})).sort((a, b) => b[1] - a[1])[0]?.[0] || dominantSeverity;
+            el('lastReplayCard').textContent = alerts.find(a => a.replay_id)?.replay_id || (replayOccurrences ? 'REPLAY' : 'N/D');
         }
 
         function pulseCards() {
@@ -894,10 +1011,10 @@
             const simulatedBlocks = (payload.alerts || []).filter(alert => alert.simulated_block).length;
             const current = id => Number.parseInt(el(id).textContent, 10) || 0;
             el('totalEventos').textContent = current('totalEventos') + eventsCreated;
-            el('eventosCriticos').textContent = current('eventosCriticos') + criticalCreated;
-            el('ipsUnicos').textContent = Math.max(current('ipsUnicos'), new Set((payload.alerts || []).map(alert => alert.ip).filter(Boolean)).size);
-            el('bloqueios').textContent = current('bloqueios') + simulatedBlocks;
-            el('tiMatches').textContent = current('tiMatches') + tiCreated;
+            el('eventosCriticos').textContent = payload.primary_attacker?.ip || el('eventosCriticos').textContent;
+            el('ipsUnicos').textContent = Math.max(current('ipsUnicos'), ...((payload.alerts || []).map(risk)));
+            el('bloqueios').textContent = 'CRITICAL';
+            el('tiMatches').textContent = current('tiMatches') + eventsCreated;
         }
 
         function applyClientFilters(alerts) {
@@ -938,6 +1055,7 @@
 
         function renderAll(alerts) {
             visibleAlerts = applyClientFilters(alerts);
+            document.body.classList.toggle('history-mode', dashboardMode === 'historico');
             updateCards(visibleAlerts);
             updateThreatLevel(visibleAlerts);
             updateEventsChart(visibleAlerts);
@@ -956,24 +1074,43 @@
         }
 
         function updateEventsChart(alerts) {
-            const buckets = {};
-            alerts.slice().reverse().forEach(alert => {
-                const label = String(alert.ts || '').slice(11, 16) || '--:--';
-                buckets[label] = (buckets[label] || 0) + Number(alert.occurrence_count || 1);
+            const selectedRange = el('rangeSelect').value;
+            const now = new Date();
+            const rangeHours = selectedRange === '1h' ? 1 : selectedRange === '24h' ? 24 : selectedRange === '15m' ? 0.25 : 5 / 60;
+            const bucketMs = selectedRange === '1h' ? 5 * 60 * 1000 : selectedRange === '24h' ? 60 * 60 * 1000 : 60 * 1000;
+            const start = new Date(now.getTime() - rangeHours * 60 * 60 * 1000);
+            const buckets = [];
+            for (let cursor = new Date(start); cursor <= now; cursor = new Date(cursor.getTime() + bucketMs)) {
+                buckets.push({ start: new Date(cursor), low: 0, medium: 0, high: 0, critical: 0, count: 0 });
+            }
+            alerts.forEach(alert => {
+                const ts = new Date(alert.ts || alert.timestamp || alert.first_seen || Date.now());
+                if (Number.isNaN(ts.getTime()) || ts < start) return;
+                const index = Math.min(buckets.length - 1, Math.max(0, Math.floor((ts - start) / bucketMs)));
+                const count = Number(alert.occurrence_count || 1);
+                const sev = normalizeSeverityLabel(alert.severity || getSeverity(risk(alert)));
+                buckets[index].count += count;
+                buckets[index][sev] += count;
             });
-            const labels = Object.keys(buckets).slice(-16);
-            const values = labels.map(label => buckets[label]);
+            const visibleBuckets = buckets.slice(-(selectedRange === '24h' ? 24 : 16));
+            const labels = visibleBuckets.map(bucket => bucket.start.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+            const values = visibleBuckets.map(bucket => bucket.count);
+            const criticalValues = visibleBuckets.map(bucket => bucket.critical);
 
             if (!chart) {
                 chart = new Chart(el('eventsChart'), {
                     type: 'line',
-                    data: { labels, datasets: [{ label: 'Eventos', data: values, borderColor: '#65e7ff', backgroundColor: 'rgba(101,231,255,0.12)', fill: true, tension: 0.32 }] },
+                    data: { labels, datasets: [
+                        { label: 'Eventos', data: values, borderColor: '#65e7ff', backgroundColor: 'rgba(101,231,255,0.10)', fill: true, tension: 0.28 },
+                        { label: 'Critical', data: criticalValues, borderColor: '#ff405d', backgroundColor: 'rgba(255,64,93,0.08)', fill: false, tension: 0.28 }
+                    ] },
                     options: chartOptions()
                 });
                 return;
             }
             chart.data.labels = labels;
             chart.data.datasets[0].data = values;
+            chart.data.datasets[1].data = criticalValues;
             chart.update('none');
         }
 
@@ -1040,11 +1177,157 @@
             typeChart.update('none');
         }
 
+        async function refreshIncidents() {
+            try {
+                const response = await fetch(INCIDENTS_URL, { cache: 'no-store', headers: authHeaders });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const payload = await response.json();
+                const incidents = payload.data || [];
+                const statusFilter = el('incidentStatusFilter')?.value || 'all';
+                const severityFilter = el('incidentSeverityFilter')?.value || 'all';
+                const term = (el('incidentSearchInput')?.value || '').trim().toLowerCase();
+                const filtered = incidents.filter(incident => {
+                    if (statusFilter !== 'all' && incident.status !== statusFilter) return false;
+                    if (severityFilter !== 'all' && incident.severity !== severityFilter) return false;
+                    if (!term) return true;
+                    const haystack = [
+                        incident.incident_id,
+                        incident.title,
+                        incident.status,
+                        incident.severity,
+                        incident.source_ip,
+                        ...(incident.source_ips || []),
+                        ...(incident.correlation_reasons || []),
+                        ...(incident.mitre_techniques || []).map(item => `${item.id} ${item.name} ${item.tactic}`)
+                    ].join(' ').toLowerCase();
+                    return haystack.includes(term);
+                });
+                const openStatuses = new Set(['NEW','DETECTED','TRIAGED','INVESTIGATING','CONTAINED']);
+                const allIps = new Set(incidents.flatMap(item => item.source_ips || [item.source_ip]).filter(Boolean));
+                const dominantMitre = Object.entries(incidents.flatMap(item => item.mitre_techniques || []).reduce((acc, mitre) => {
+                    const key = mitre.id || 'N/D';
+                    acc[key] = (acc[key] || 0) + 1;
+                    return acc;
+                }, {})).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/D';
+                const lastReplay = incidents.flatMap(item => item.replay_ids || []).filter(Boolean)[0] || 'N/D';
+                el('totalEventos').textContent = incidents.filter(item => openStatuses.has(item.status)).length;
+                el('eventosCriticos').textContent = incidents.filter(item => item.severity === 'CRITICAL').length;
+                el('ipsUnicos').textContent = allIps.size;
+                el('bloqueios').textContent = Math.max(0, ...incidents.map(item => Number(item.max_score || 0)));
+                el('tiMatches').textContent = dominantMitre;
+                el('lastReplayCard').textContent = lastReplay;
+                el('incidentsStatus').textContent = `${filtered.length}/${incidents.length} INCIDENTES`;
+                el('incidentsList').innerHTML = filtered.slice(0, 10).map(incident => `
+                    <div class="rank-item clickable-row" data-incident-id="${esc(incident.incident_id)}">
+                        <span>
+                            <strong>${esc(incident.title)}</strong><br>
+                            <span class="muted">${esc(incident.incident_id)} | ${esc(incident.status)} | ${esc(incident.severity)} | IPs: ${esc((incident.source_ips || [incident.source_ip]).filter(Boolean).length)} | eventos: ${esc(incident.event_count)} | MITRE: ${esc((incident.mitre_techniques || []).map(item => item.id).join(', ') || 'N/D')}</span>
+                        </span>
+                        <strong>${esc(incident.max_score)}</strong>
+                    </div>
+                `).join('') || '<div class="muted">Nenhum incidente encontrado. Execute um replay para gerar eventos simulados.</div>';
+            } catch (error) {
+                el('incidentsStatus').textContent = 'API INDISPONÍVEL';
+            }
+        }
+
+        async function openIncidentDetail(incidentId) {
+            el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Incidente</div><div>Carregando...</div></div>';
+            el('drawerBackdrop').classList.add('open');
+            el('detailDrawer').classList.add('open');
+            try {
+                const response = await fetch(`${INCIDENTS_URL}/${encodeURIComponent(incidentId)}`, { cache: 'no-store', headers: authHeaders });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const incident = await response.json();
+                renderIncidentDetail(incident);
+            } catch (error) {
+                el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Erro</div><div>Falha ao carregar incidente.</div></div>';
+            }
+        }
+
+        function renderIncidentDetail(incident) {
+            const mitres = (incident.mitre_techniques || []).map(item => `${item.id} - ${item.name} (${item.tactic})`).join(', ') || 'N/D';
+            const timeline = (incident.timeline || []).slice(-16).map(item => `${item.local_time || new Date(item.timestamp).toLocaleString('pt-BR')} | ${item.phase || item.stage} | ${item.source_ip || 'N/D'} | ${item.event_type} | ${item.severity} | score ${item.score} | ${item.mitre_id || 'N/D'}`).join('\n');
+            const alerts = (incident.related_alerts || []).slice(0, 12).map(item => `${item.local_time || item.timestamp} | ${item.source_ip || 'N/D'} -> ${item.target_host || item.target_ip || 'N/D'}:${item.target_port || 'N/D'} | ${item.event_type} | ${item.severity} | score ${item.score} | regra ${item.internal_rule_id || 'N/D'}`).join('\n') || 'N/D';
+            const recommendations = (incident.recommendations || []).join('\n');
+            const sourceIps = (incident.source_ips || [incident.source_ip]).filter(Boolean).join(', ') || 'N/D';
+            const reasons = (incident.correlation_reasons || []).join(', ') || 'N/D';
+            const assets = (incident.affected_assets || []).slice(0, 8).map(item => `${item.target_host || item.target_ip || 'N/D'}:${item.target_port || 'N/D'} | ${item.target_service || 'N/D'} | criticidade ${item.asset_criticality || 'N/D'} | ${item.business_impact || 'impacto N/D'}`).join('\n') || 'N/D';
+            const evidence = (incident.evidence || []).slice(0, 10).map(item => `${item.rule || 'regra N/D'} | eventos ${item.event_count || 'N/D'} | ${item.first_seen || 'N/D'} -> ${item.last_seen || 'N/D'} | ${item.severity_reason || item.log_summary || 'evidencia N/D'}`).join('\n') || 'N/D';
+            const audit = (incident.audit_log || []).slice(0, 6).map(item => `${item.changed_at ? new Date(item.changed_at).toLocaleString('pt-BR') : 'N/D'} | ${item.field_changed}: ${item.old_value || 'vazio'} -> ${item.new_value || 'vazio'} | ${item.changed_by || 'system'}`).join('\n') || 'Sem alterações manuais.';
+            el('detailContent').innerHTML = `
+                <div class="detail-row"><div class="detail-label">Incidente</div><div>${esc(incident.incident_id)} | ${esc(incident.title)}</div></div>
+                <div class="detail-row"><div class="detail-label">Tipo / Lifecycle</div><div>${esc((incident.source_ips || []).length > 1 ? 'campaign' : 'incident')} | ${esc(incident.lifecycle_stage || incident.status)} | status ${esc(incident.status)}</div></div>
+                <div class="detail-row"><div class="detail-label">Severidade / Score</div><div>${esc(incident.severity)} | score ${esc(incident.max_score)}<br>${esc(incident.score_explanation || '')}</div></div>
+                <div class="detail-row"><div class="detail-label">IP principal</div><div><button class="button ip-link" data-source-ip="${esc(incident.source_ip)}" type="button">${esc(incident.source_ip)}</button></div></div>
+                <div class="detail-row"><div class="detail-label">IPs envolvidos</div><div>${esc(sourceIps)}</div></div>
+                <div class="detail-row"><div class="detail-label">Ativos afetados</div><div style="white-space:pre-wrap">${esc(assets)}</div></div>
+                <div class="detail-row"><div class="detail-label">Correlação</div><div>${esc(reasons)}</div></div>
+                <div class="detail-row"><div class="detail-label">MITRE ATT&CK</div><div>${esc(mitres)}</div></div>
+                <div class="detail-row"><div class="detail-label">Resposta recomendada</div><div>${esc(incident.recommended_action || 'N/D')}<br>${esc(incident.response_playbook || 'N/D')} | ${esc(incident.execution_mode || 'simulation')} / ${esc(incident.execution_status || 'not_executed')}</div></div>
+                <div class="detail-row"><div class="detail-label">Resumo do Analista</div><div>${esc(incident.human_summary)}</div></div>
+                <div class="detail-row"><div class="detail-label">Evidências</div><div style="white-space:pre-wrap">${esc(evidence)}</div></div>
+                <div class="detail-row"><div class="detail-label">Alertas relacionados</div><div style="white-space:pre-wrap">${esc(alerts)}</div></div>
+                <div class="detail-row"><div class="detail-label">Linha do Tempo</div><div style="white-space:pre-wrap">${esc(timeline)}</div></div>
+                <div class="detail-row"><div class="detail-label">Audit log</div><div style="white-space:pre-wrap">${esc(audit)}</div></div>
+                <div class="detail-row"><div class="detail-label">Próximas ações sugeridas</div><div style="white-space:pre-wrap">${esc(recommendations)}</div></div>
+                <div class="detail-row">
+                    <div class="detail-label">Atualizar incidente</div>
+                    <div class="incident-form">
+                        <select class="select" id="incidentStatusSelect">
+                            ${['DETECTED','TRIAGED','INVESTIGATING','CONTAINED','RESOLVED','FALSE_POSITIVE','CLOSED'].map(status => `<option value="${status}" ${incident.status === status ? 'selected' : ''}>${status}</option>`).join('')}
+                        </select>
+                        <input id="incidentAssignedTo" value="${esc(incident.assigned_to || '')}" placeholder="Responsável">
+                        <input id="incidentSocAction" value="${esc(incident.soc_action || 'investigação simulada')}" placeholder="Ação SOC simulada">
+                        <textarea id="incidentNotes" placeholder="Notas do analista">${esc(incident.analyst_notes || '')}</textarea>
+                        <button class="button" id="saveIncidentButton" type="button" data-incident-id="${esc(incident.incident_id)}">Salvar incidente</button>
+                        <button class="button" id="exportIncidentPdfButton" type="button" data-incident-id="${esc(incident.incident_id)}">Exportar PDF</button>
+                        <button class="button" id="exportIncidentButton" type="button" data-incident-id="${esc(incident.incident_id)}">Exportar Markdown</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function saveIncidentUpdate(incidentId) {
+            const payload = {
+                status: el('incidentStatusSelect').value,
+                assigned_to: el('incidentAssignedTo').value,
+                soc_action: el('incidentSocAction').value,
+                analyst_notes: el('incidentNotes').value
+            };
+            const response = await fetch(`${INCIDENTS_URL}/${encodeURIComponent(incidentId)}`, {
+                method: 'PATCH',
+                cache: 'no-store',
+                headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const updated = await response.json();
+            renderIncidentDetail(updated);
+            refreshIncidents();
+        }
+
+        function exportIncidentReport(incidentId) {
+            window.open(`${REPORT_URL}/${encodeURIComponent(incidentId)}.md`, '_blank', 'noopener');
+        }
+
+        function exportIncidentPdf(incidentId) {
+            window.open(`${REPORT_URL}/${encodeURIComponent(incidentId)}.pdf`, '_blank', 'noopener');
+        }
+
         function renderFeed(alerts) {
             if (!alerts.length) {
                 el('feedBody').innerHTML = '<tr><td colspan="8">Nenhum alerta no período selecionado.</td></tr>';
                 return;
             }
+            const historyMode = dashboardMode === 'historico';
+            el('feedHeadTime').textContent = historyMode ? 'Timestamp' : 'Hora';
+            el('feedHeadStatus').textContent = historyMode ? 'Tipo de alerta' : 'Severidade';
+            el('feedHeadRisk').textContent = 'Score';
+            el('feedHeadConsolidation').textContent = historyMode ? 'Severidade' : 'Correlação';
+            el('feedHeadService').textContent = 'MITRE / Regra';
+            el('feedHeadIntel').textContent = historyMode ? 'Evidência/Correlação' : 'Evidência';
+            el('feedHeadAction').textContent = historyMode ? 'Replay' : 'Playbook';
             el('feedBody').innerHTML = alerts.slice(0, 80).map(alert => {
                 const sev = getSeverity(risk(alert));
                 const color = getSeverityColor(sev);
@@ -1059,23 +1342,35 @@
                 const services = Array.isArray(alert.services) && alert.services.length ? alert.services.join(', ') : (alert.service || 'N/D');
                 const eventTypes = Array.isArray(alert.event_types) && alert.event_types.length ? alert.event_types.join(', ') : (alert.event_type || 'N/D');
                 const consolidationClass = occurrenceCount > 1 ? (sev === 'critical' ? 'critical' : 'medium') : 'low';
-                const ti = alert.threat_intel_match
-                    ? `<span class="ti">${esc(alert.threat_category || 'IOC')}</span><br><span class="muted">${esc(alert.threat_source || 'local')}</span>`
-                    : '<span class="muted">Sem IOC</span>';
+                const reasons = Array.isArray(alert.correlation_reasons) && alert.correlation_reasons.length
+                    ? alert.correlation_reasons.join('; ')
+                    : (Array.isArray(alert.reasons) && alert.reasons.length ? alert.reasons.join('; ') : (alert.correlation_reason || 'N/D'));
+                const mitre = `${alert.mitre_id || 'N/D'} ${alert.mitre_name || ''}`;
+                const target = `${alert.target_host || alert.target_ip || 'sentinela-local'}:${alert.target_port || alert.port || 'N/D'}`;
+                const asset = `${alert.asset_criticality || 'medium'} | ${alert.business_impact || 'impacto N/D'}`;
+                const rule = `${alert.internal_rule_id || 'SENTINELA'} - ${alert.internal_rule_name || alert.status || 'Regra interna'}`;
+                const playbook = alert.response_playbook || 'PB-SOC-001-triagem-alerta';
+                const execution = `${alert.execution_mode || 'simulation'} / ${alert.execution_status || 'not_executed'}`;
+                const ti = historyMode
+                    ? `<span class="muted">MITRE: ${esc(mitre)}<br>${esc(reasons)}</span>`
+                    : alert.threat_intel_match
+                    ? `<span class="ti">IOC local: ${esc(alert.threat_category || 'IOC')}</span><br><span class="muted">${esc(alert.score_explanation || reasons)}</span>`
+                    : `<span class="muted">${esc(alert.score_explanation || reasons)}</span>`;
+                const rowClass = (alert.is_replay_event || alert.replay_id || alert.is_demo) ? 'clickable-row replay-row' : 'clickable-row';
                 return `
-                    <tr class="clickable-row" data-alert-id="${esc(alert.id)}">
-                        <td class="mono" style="border-left:4px solid ${color}; color:${color}">${esc(alert.ts)}</td>
-                        <td class="mono">${esc(alert.ip)}</td>
-                        <td><span class="tag ${sev}" style="color:${color}; border-color:${color}; ${glow}">${esc(alert.status)}</span></td>
+                    <tr class="${rowClass}" data-alert-id="${esc(alert.id)}">
+                        <td class="mono" style="border-left:4px solid ${color}; color:${color}">${esc(alert.ts ? new Date(alert.ts).toLocaleString('pt-BR') : 'N/D')}</td>
+                        <td class="mono"><button class="button ip-link" data-source-ip="${esc(alert.source_ip || alert.ip)}" type="button">${esc(alert.source_ip || alert.ip)}</button><br><span class="muted">-> ${esc(target)}<br>${esc(asset)}</span></td>
+                        <td><span class="tag ${sev}" style="color:${color}; border-color:${color}; ${glow}">${esc(String(alert.severity || sev).toUpperCase())}</span><br><span class="muted">${esc(alert.alert_type || 'alert')}</span></td>
                         <td class="mono" style="color:${color}">${risk(alert)}</td>
                         <td class="mono">
-                            <div class="tag ${consolidationClass}">${esc(occurrenceLabel)} ${esc(aggregated)}</div>
+                            <div class="tag ${historyMode ? sev : consolidationClass}">${esc(historyMode ? String(alert.severity || sev).toUpperCase() : (occurrenceCount > 1 ? 'Incidente correlacionado' : 'Evento individual'))}</div>
                             <div class="muted">${esc(firstSeen)} -> ${esc(lastSeen)}</div>
-                            <div class="muted">${esc(eventTypes)}</div>
+                            <div class="muted">${esc(historyMode ? (alert.correlation_key || 'N/D') : eventTypes)}</div>
                         </td>
-                        <td class="mono">${esc(ports)} / ${esc(services)}</td>
+                        <td class="mono">MITRE: ${esc(mitre)}<br><span class="muted">${esc(rule)}<br>${esc(alert.correlation_rule || alert.correlation_key || 'N/D')}</span></td>
                         <td>${ti}</td>
-                        <td><span class="action ${actionClass}">${action}</span></td>
+                        <td><span class="action ${actionClass}">${historyMode ? esc(alert.replay_id || (alert.is_replay_event ? 'REPLAY' : 'N/D')) : esc(playbook)}</span><br><span class="muted">${esc(action)} | ${esc(execution)}</span></td>
                     </tr>`;
             }).join('');
         }
@@ -1147,7 +1442,7 @@
                         <div>
                             <div class="timeline-title">${esc(item.stage)}</div>
                             <div class="timeline-desc">${esc(item.description)}</div>
-                            <div class="timeline-meta">${esc(item.ip)} | ${esc(item.event_type)}</div>
+                            <div class="timeline-meta">${esc(item.local_time || time)} | ${esc(item.phase || 'N/D')} | ${esc(item.source_ip || item.ip)} | ${esc(item.event_type)} | score ${esc(item.score)} | ${esc(item.mitre_id || 'N/D')} ${item.replay_id ? '| replay ' + esc(item.replay_id) : ''}</div>
                         </div>
                         <span class="severity-badge ${sev}" style="color:${color}; border-color:${color}; ${sev === 'critical' ? 'box-shadow:0 0 8px rgba(239, 68, 68, 0.6);' : sev === 'medium' ? 'box-shadow:0 0 6px rgba(250, 204, 21, 0.22);' : ''}">${esc(String(item.severity || sev).toUpperCase())}</span>
                     </div>`;
@@ -1184,6 +1479,17 @@
             el('demoError').classList.remove('show');
         }
 
+        function setDashboardMode(mode) {
+            dashboardMode = mode;
+            demoOnlyMode = mode === 'demo';
+            el('demoModeButton').classList.toggle('active', mode === 'demo');
+            el('historyModeButton').classList.toggle('active', mode === 'historico');
+            el('incidentStatus').textContent = mode === 'demo' ? 'MODO DEMONSTRAÇÃO' : 'MODO HISTÓRICO';
+            seenIds = new Set();
+            renderAll(allAlerts);
+            refresh();
+        }
+
         async function simulateAttack() {
             const button = el('simulateAttackButton');
             button.disabled = true;
@@ -1198,7 +1504,10 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const payload = await response.json();
                 hideDemoError();
+                dashboardMode = 'demo';
                 demoOnlyMode = true;
+                el('demoModeButton').classList.add('active');
+                el('historyModeButton').classList.remove('active');
                 renderIncidentOverview(payload);
                 renderIncidentTimeline(payload.timeline || []);
                 el('criticalBanner').classList.add('show');
@@ -1223,7 +1532,7 @@
         async function refresh() {
             const selectedRange = el('rangeSelect').value;
             try {
-                const demoQuery = demoOnlyMode ? '&mode=demo' : '';
+                const demoQuery = dashboardMode === 'demo' ? '&mode=demo' : '';
                 const response = await fetch(`${API_URL}?range=${encodeURIComponent(selectedRange)}${demoQuery}`, { cache: 'no-store', headers: authHeaders });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const payload = await response.json();
@@ -1235,7 +1544,8 @@
                 if (seenIds.size > 600) seenIds = new Set(Array.from(seenIds).slice(-300));
 
                 renderAll(alerts);
-                el('rangeLabel').textContent = `Filtro: ${rangeNames[selectedRange] || selectedRange}`;
+                refreshIncidents();
+                el('rangeLabel').textContent = `Filtro: ${rangeNames[selectedRange] || selectedRange} | Modo: ${dashboardMode.toUpperCase()}`;
                 el('lastUpdate').textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
             } catch (error) {
                 el('lastUpdate').textContent = 'API indisponível';
@@ -1244,9 +1554,24 @@
 
         function openDrawer(alert) {
             const fields = [
-                ['IP', alert.ip],
+                ['IP', alert.source_ip || alert.ip],
+                ['Alvo', `${alert.target_host || 'N/D'} / ${alert.target_ip || 'N/D'}`],
+                ['Serviço alvo', `${alert.target_service || alert.service || 'N/D'}:${alert.target_port || alert.port || 'N/D'}`],
+                ['Usuário alvo', alert.target_user || 'N/D'],
+                ['Criticidade do ativo', alert.asset_criticality || 'N/D'],
+                ['Impacto possível', alert.business_impact || 'N/D'],
                 ['Status', alert.status],
                 ['Risco', risk(alert)],
+                ['Score explicado', alert.score_explanation || 'N/D'],
+                ['MITRE', `${alert.mitre_id || 'N/D'} - ${alert.mitre_name || 'N/D'} (${alert.mitre_tactic || 'N/D'})`],
+                ['Regra interna', `${alert.internal_rule_id || 'N/D'} - ${alert.internal_rule_name || 'N/D'}`],
+                ['Correlação', alert.correlation_rule || alert.correlation_key || 'N/D'],
+                ['Playbook recomendado', alert.response_playbook || 'N/D'],
+                ['Ação recomendada', alert.recommended_action || 'N/D'],
+                ['Razão da ação', alert.action_reason || 'N/D'],
+                ['Execução', `${alert.execution_mode || 'simulation'} / ${alert.execution_status || 'not_executed'}`],
+                ['Notas de execução', alert.execution_notes || 'N/D'],
+                ['Explicação', alert.human_summary || alert.explanation || 'N/D'],
                 ['Tipo de evento', alert.event_type],
                 ['Serviço', alert.service],
                 ['Port', alert.port],
@@ -1276,6 +1601,50 @@
             el('detailDrawer').classList.add('open');
         }
 
+        async function openIpInvestigation(sourceIp) {
+            el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Investigação</div><div>Carregando...</div></div>';
+            el('drawerBackdrop').classList.add('open');
+            el('detailDrawer').classList.add('open');
+            try {
+                const response = await fetch(`${INVESTIGATION_URL}/${encodeURIComponent(sourceIp)}`, { cache: 'no-store', headers: authHeaders });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                const mitres = (data.mitre_techniques || []).map(item => `${item.id} - ${item.name} (${item.tactic})`).join(', ') || 'N/D';
+                const timeline = (data.timeline || []).slice(-12).map(item => `${item.local_time || new Date(item.timestamp).toLocaleString('pt-BR')} | ${item.phase || item.stage} | ${item.event_type} | ${item.severity} | score ${item.score} | ${item.mitre_id || 'N/D'} | ${item.replay_id || 'sem replay'}`).join('\n');
+                const incidents = (data.related_incidents || []).map(item => `${item.incident_id} | ${item.status} | ${item.severity} | score ${item.max_score} | IPs: ${(item.source_ips || [item.source_ip]).join(', ')}`).join('\n') || 'N/D';
+                const recommendations = (data.recommended_actions || []).join('\n') || 'N/D';
+                const fields = [
+                    ['IP investigado', data.source_ip],
+                    ['Score atual', data.current_score],
+                    ['Maior severidade', data.max_severity],
+                    ['Primeiro visto', data.first_seen],
+                    ['Último visto', data.last_seen],
+                    ['Total de eventos', data.event_count],
+                    ['Incidentes relacionados', data.incident_count],
+                    ['Tipos de evento', (data.event_types || []).join(', ') || 'N/D'],
+                    ['Portas/serviços', (data.services || []).join(', ') || 'N/D'],
+                    ['MITRE relacionadas', mitres],
+                    ['Motivos de correlação', (data.correlation_reasons || []).join('; ') || 'N/D'],
+                    ['Ações SOC simuladas', (data.soc_actions || []).join(', ') || 'N/D'],
+                    ['Eventos de replay', (data.replay_events || []).length],
+                    ['Ataque multi-IP', data.is_multi_ip ? 'Sim' : 'Não'],
+                    ['Outros IPs correlacionados', (data.correlated_ips || []).join(', ') || 'N/D'],
+                    ['Incidentes relacionados', incidents],
+                    ['Resumo do Analista', data.analyst_summary || data.human_summary],
+                    ['Próximas ações sugeridas', recommendations],
+                    ['Linha do Tempo', timeline || 'N/D'],
+                ];
+                el('detailContent').innerHTML = fields.map(([label, value]) => `
+                    <div class="detail-row">
+                        <div class="detail-label">${esc(label)}</div>
+                        <div style="white-space:pre-wrap">${esc(value)}</div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Erro</div><div>Falha ao carregar investigação por IP.</div></div>';
+            }
+        }
+
         function closeDrawer() {
             el('drawerBackdrop').classList.remove('open');
             el('detailDrawer').classList.remove('open');
@@ -1283,6 +1652,8 @@
 
         el('refreshButton').addEventListener('click', refresh);
         el('simulateAttackButton').addEventListener('click', simulateAttack);
+        el('demoModeButton').addEventListener('click', () => setDashboardMode('demo'));
+        el('historyModeButton').addEventListener('click', () => setDashboardMode('historico'));
         el('rangeSelect').addEventListener('change', () => {
             seenIds = new Set();
             refresh();
@@ -1291,17 +1662,49 @@
             el(id).addEventListener('input', () => renderAll(allAlerts));
             el(id).addEventListener('change', () => renderAll(allAlerts));
         });
+        ['incidentStatusFilter', 'incidentSeverityFilter', 'incidentSearchInput'].forEach(id => {
+            el(id).addEventListener('input', refreshIncidents);
+            el(id).addEventListener('change', refreshIncidents);
+        });
         el('feedBody').addEventListener('click', event => {
+            const ipButton = event.target.closest('[data-source-ip]');
+            if (ipButton) {
+                openIpInvestigation(ipButton.dataset.sourceIp);
+                return;
+            }
             const row = event.target.closest('[data-alert-id]');
             if (!row) return;
             const alert = visibleAlerts.find(item => String(item.id) === row.dataset.alertId);
             if (alert) openDrawer(alert);
+        });
+        el('incidentsList').addEventListener('click', event => {
+            const item = event.target.closest('[data-incident-id]');
+            if (item) openIncidentDetail(item.dataset.incidentId);
+        });
+        el('detailContent').addEventListener('click', event => {
+            const ipButton = event.target.closest('[data-source-ip]');
+            if (ipButton) {
+                openIpInvestigation(ipButton.dataset.sourceIp);
+                return;
+            }
+            const saveButton = event.target.closest('#saveIncidentButton');
+            if (saveButton) {
+                saveIncidentUpdate(saveButton.dataset.incidentId).catch(() => {
+                    saveButton.textContent = 'Falha ao salvar';
+                });
+                return;
+            }
+            const exportButton = event.target.closest('#exportIncidentButton');
+            if (exportButton) exportIncidentReport(exportButton.dataset.incidentId);
+            const exportPdfButton = event.target.closest('#exportIncidentPdfButton');
+            if (exportPdfButton) exportIncidentPdf(exportPdfButton.dataset.incidentId);
         });
         el('closeDrawer').addEventListener('click', closeDrawer);
         el('drawerBackdrop').addEventListener('click', closeDrawer);
 
         renderStaticPoints([]);
         refresh();
+        refreshIncidents();
         setInterval(refresh, 2500);
     </script>
 </body>

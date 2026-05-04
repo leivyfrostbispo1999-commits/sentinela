@@ -6,8 +6,15 @@ rules:
     conditions:
       - PORT_SCAN
       - BRUTE_FORCE
-    min_risk: 97
-    risk: 97
+    min_risk: 88
+    risk: 88
+    score: 88
+    severity: HIGH
+    mitre_id: T1046
+    mitre_name: Network Service Discovery
+    mitre_tactic: Discovery
+    correlation_key: source_ip
+    action: simulated_block
     status: ATAQUE MULTIETAPA
     tags:
       - recon
@@ -20,8 +27,12 @@ rules:
     description: Alta frequência de eventos do mesmo IP dentro da janela temporal.
     threshold: 7
     window_seconds: 300
-    min_risk: 95
-    risk: 95
+    min_risk: 86
+    risk: 86
+    score: 86
+    severity: HIGH
+    correlation_key: source_ip
+    action: simulated_block
     status: CAMPANHA HOSTIL
     tags:
       - frequency
@@ -41,8 +52,15 @@ rules:
           - 3389
     threshold: 5
     window_seconds: 300
-    min_risk: 96
-    risk: 96
+    min_risk: 88
+    risk: 88
+    score: 88
+    severity: HIGH
+    mitre_id: T1110
+    mitre_name: Brute Force
+    mitre_tactic: Credential Access
+    correlation_key: source_ip
+    action: simulated_block
     status: BRUTE FORCE CRÍTICO
     tags:
       - auth
@@ -61,6 +79,13 @@ rules:
     window_seconds: 300
     min_risk: 88
     risk: 88
+    score: 88
+    severity: HIGH
+    mitre_id: T1046
+    mitre_name: Network Service Discovery
+    mitre_tactic: Discovery
+    correlation_key: source_ip
+    action: monitor
     status: PORT SCAN EM PORTA SENSÍVEL
     tags:
       - recon
@@ -76,6 +101,11 @@ rules:
           - NORMAL
     threshold: 1
     min_risk: 10
+    score: 10
+    severity: LOW
+    mitre_id:
+    correlation_key: source_ip
+    action: monitor
     status: REGRA DESATIVADA
     tags:
       - example

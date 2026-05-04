@@ -21,7 +21,7 @@
 - Autenticação simples por token no dashboard e na API.
 - Drill-down no dashboard para investigação de alertas.
 
-## SENTINELA SOC 5.6
+## Fundação Técnica Pré-6.0
 
 - Redis adotado como state store do `rule_engine`.
 - Fallback em memória mantido para resiliência da demo local.
@@ -33,6 +33,18 @@
 - Endpoint `POST /demo/simulate-attack` protegido por autenticação e limitado a alertas simulados.
 - Timeline investigativa vertical adicionada para demonstrar progressão de detecção, correlação e resposta SOC.
 
+## SENTINELA SOC 6.0
+
+- Incidentes passaram a ser entidade persistida em `incidents`, com relacionamento em `incident_alerts` e trilha manual em `incident_audit_log`.
+- A correlação multi-IP/multi-entidade considera `source_ip`, destino, usuário, serviço/porta, MITRE, `replay_id` e janela temporal de 10 minutos.
+- Overrides legados em `incident_overrides` foram preservados para compatibilidade, mas os endpoints 6.0 priorizam os incidentes materializados.
+- A investigação por IP foi refinada com resumo do analista, recomendações defensivas e incidentes relacionados.
+- A timeline passou a carregar fases técnicas como `RECONNAISSANCE`, `CREDENTIAL_ACCESS`, `IOC_MATCH`, `ESCALATION`, `CORRELATION` e `RESPONSE_SIMULATED`.
+- `/metrics` agora entrega métricas JSON reais para o dashboard; o formato Prometheus fica disponível em `/metrics/prometheus`.
+- `/rules` expõe regras YAML carregadas e validadas, com fallback seguro para defaults internos.
+- `scripts/replay_attack.py` passou a suportar múltiplos cenários simulados sem rede externa, ataque real ou bloqueio real, incluindo `multi_ip_campaign`.
+- Relatórios de incidente agora têm saída Markdown e PDF local, sem serviço externo.
+
 ## Decisões de Segurança
 
 - `ENABLE_BLOCK=false` permanece como padrão obrigatório.
@@ -41,6 +53,7 @@
 - O token padrão existe apenas para facilitar a demo local.
 - O modo demo registra `simulated_block=true`, mas não executa firewall, `iptables` ou bloqueio real.
 - A simulação de incidente é educacional e foi desenhada para demonstrar fluxo SOC sem risco operacional.
+- Alertas 6.0 carregam MITRE ATT&CK, explicação humana, investigação por IP e incidentes editáveis pela API.
 - A timeline é visual e educacional; ela melhora a narrativa de investigação sem adicionar ação ofensiva ou bloqueio real.
 
 ## Decisões de Escalabilidade

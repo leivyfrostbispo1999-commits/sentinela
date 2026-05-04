@@ -43,8 +43,56 @@ def test_risk_scoring_increases_for_brute_force_on_sensitive_port(monkeypatch):
     status, risk, reasons = rule_engine.calculate_risk(event, events, None, [])
 
     assert status == "BRUTE FORCE"
-    assert risk >= 88
+    assert 70 <= risk < 90
     assert "porta_sensivel" in reasons
+
+
+def test_accumulative_threat_score_escalates_privileged_brute_force(monkeypatch):
+    rule_engine = load_rule_engine(monkeypatch)
+    ip = "203.0.113.45"
+    events = []
+    for username in ["usuario", "usuario", "operador", "admin"]:
+        events = rule_engine.update_state({"ip": ip, "event_type": "FAILED_LOGIN", "port": 22, "service": "ssh", "username": username})
+
+    score = rule_engine.calculate_threat_score(
+        {"ip": ip, "event_type": "BRUTE_FORCE", "port": 22, "service": "ssh", "username": "admin"},
+        events,
+        None,
+    )
+
+    assert score["source_ip"] == ip
+    assert score["threat_score"] >= 90
+    assert score["severity"] == "CRITICAL"
+    assert "admin_user_attempt:+25" in score["reasons"]
+    assert "brute_force_pattern:+40" in score["reasons"]
+
+
+def test_mitre_mapping_and_human_summary_are_added_to_alert(monkeypatch):
+    rule_engine = load_rule_engine(monkeypatch)
+    event = {"ip": "203.0.113.45", "event_type": "FAILED_LOGIN", "port": 22, "service": "ssh", "username": "admin"}
+    events = rule_engine.update_state(event)
+    status, risk, reasons = rule_engine.calculate_risk(event, events, None, [])
+    correlation_key, correlation_reason = rule_engine.build_correlation(events, event)
+    auto, block = rule_engine.simulated_auto_response(status, risk, False)
+
+    alert = rule_engine.build_alert(event, status, risk, events, reasons, auto, block, None, correlation_key, correlation_reason, [])
+
+    assert alert["mitre_id"] == "T1110"
+    assert alert["mitre_name"] == "Brute Force"
+    assert "203.0.113.45" in alert["human_summary"]
+
+
+def test_correlation_identifies_privileged_brute_force(monkeypatch):
+    rule_engine = load_rule_engine(monkeypatch)
+    ip = "203.0.113.45"
+    for username in ["usuario", "usuario", "admin"]:
+        rule_engine.update_state({"ip": ip, "event_type": "FAILED_LOGIN", "port": 22, "service": "ssh", "username": username})
+    events = rule_engine.update_state({"ip": ip, "event_type": "BRUTE_FORCE", "port": 22, "service": "ssh", "username": "admin"})
+
+    key, reason = rule_engine.build_correlation(events, {"ip": ip, "event_type": "BRUTE_FORCE", "port": 22, "service": "ssh", "username": "admin"})
+
+    assert key == f"{ip}|credential_attack:privileged"
+    assert "usuário privilegiado" in reason
 
 
 def test_yaml_multistage_detection(monkeypatch):
@@ -68,7 +116,7 @@ def test_yaml_multistage_detection(monkeypatch):
     status, risk, reasons = rule_engine.calculate_risk(brute, events, None, rules)
 
     assert status == "ATAQUE MULTIETAPA"
-    assert risk >= 97
+    assert 80 <= risk < 90
     assert "regra_yaml:ataque_multi_etapa" in reasons
 
 
@@ -106,6 +154,16 @@ def test_aggregation_collapses_repeated_events_by_ip_and_status(monkeypatch):
     assert alert_2["event_types"] == ["PORT_SCAN"]
     assert alert_2["simulated_block"] is False
     assert alert_2["action_soc"] in {"MONITORADO", "INVESTIGANDO"}
+    assert alert_2["source_ip"] == "20.20.20.20"
+    assert "threat_score" in alert_2
+    assert "correlation_reasons" in alert_2
+    assert alert_2["execution_mode"] == "simulation"
+    assert alert_2["execution_status"] == "not_executed"
+    assert alert_2["mitre_id"] == "T1046"
+    assert alert_2["internal_rule_id"].startswith("SENTINELA-")
+    assert alert_2["target_host"] == "sentinela-local"
+    assert "score_breakdown" in alert_2
+    assert "score_explanation" in alert_2
 
 
 def test_aggregation_window_expires_old_entries(monkeypatch):
@@ -145,3 +203,57 @@ def test_fallback_without_redis_uses_memory_store(monkeypatch):
     rule_engine = load_rule_engine(monkeypatch)
 
     assert isinstance(rule_engine.STATE_STORE, rule_engine.InMemoryCorrelationStore)
+
+
+def test_load_rules_uses_internal_fallback_when_yaml_missing(monkeypatch):
+    rule_engine = load_rule_engine(monkeypatch)
+    monkeypatch.setattr(rule_engine, "RULES_PATH", Path("arquivo-inexistente.yml"))
+
+    rules = rule_engine.load_rules()
+
+    assert any(rule["name"] == "brute_force" for rule in rules)
+
+
+def test_load_rules_ignores_disabled_and_normalizes_yaml(monkeypatch, tmp_path):
+    rule_engine = load_rule_engine(monkeypatch)
+    rules_file = tmp_path / "sentinela_rules.yml"
+    rules_file.write_text(
+        """
+rules:
+  - name: disabled_rule
+    enabled: false
+    event_type: PORT_SCAN
+    score: 99
+  - name: ssh_brute_force
+    enabled: true
+    event_type: FAILED_LOGIN
+    score: 40
+    threshold: 5
+    window_seconds: 60
+    mitre_id: T1110
+    tags:
+      - ssh
+    correlation_key: source_ip
+    action: simulated_block
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rule_engine, "RULES_PATH", rules_file)
+
+    rules = rule_engine.load_rules()
+
+    assert all(rule["name"] != "disabled_rule" for rule in rules)
+    assert rules[0]["name"] == "ssh_brute_force"
+    assert rules[0]["severity"] == "LOW"
+    assert rules[0]["action"] == "simulated_block"
+
+
+def test_load_rules_fallback_on_bad_yaml(monkeypatch, tmp_path):
+    rule_engine = load_rule_engine(monkeypatch)
+    rules_file = tmp_path / "bad.yml"
+    rules_file.write_text("rules: [", encoding="utf-8")
+    monkeypatch.setattr(rule_engine, "RULES_PATH", rules_file)
+
+    rules = rule_engine.load_rules()
+
+    assert any(rule["name"] == "ssh_brute_force" for rule in rules)
