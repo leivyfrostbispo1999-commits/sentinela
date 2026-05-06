@@ -7,6 +7,8 @@ import sys
 import time
 import uuid
 from collections import defaultdict, deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,7 @@ try:
 except ImportError:
     yaml = None
 from kafka import KafkaConsumer, KafkaProducer
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 from threat_intel import check_ip
 
 
@@ -32,6 +35,20 @@ ALERT_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("ALERT_RATE_LIMIT_WINDOW_SECONDS
 ALERT_AGGREGATION_WINDOW_SECONDS = int(os.getenv("ALERT_AGGREGATION_WINDOW_SECONDS", "120"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 REDIS_STATE_ENABLED = os.getenv("REDIS_STATE_ENABLED", "true").lower() == "true"
+METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
+SERVICE_READY = False
+REGISTRY = CollectorRegistry()
+
+EVENTS_CONSUMED = Counter("sentinela_rule_engine_events_consumed_total", "Eventos consumidos do Kafka", registry=REGISTRY)
+RULES_EXECUTED = Counter("sentinela_rule_engine_rules_executed_total", "Regras executadas pelo motor", registry=REGISTRY)
+ALERTS_PUBLISHED = Counter("sentinela_rule_engine_alerts_published_total", "Alertas publicados pelo motor", registry=REGISTRY)
+INCIDENTS_GENERATED = Counter("sentinela_rule_engine_incidents_generated_total", "Incidentes candidatos gerados por severidade", ["severity"], registry=REGISTRY)
+MATCHING_EVENTS = Counter("sentinela_rule_engine_matching_events_total", "Eventos com match acima de atividade normal", registry=REGISTRY)
+CORRELATION_SECONDS = Histogram("sentinela_rule_engine_correlation_seconds", "Tempo de correlacao por evento", buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5), registry=REGISTRY)
+PIPELINE_LATENCY_SECONDS = Histogram("sentinela_pipeline_latency_seconds", "Latencia entre timestamp do evento e processamento no rule_engine", buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60), registry=REGISTRY)
+KAFKA_CONSUMED = Counter("sentinela_kafka_messages_consumed_total", "Mensagens consumidas do Kafka", ["service", "topic"], registry=REGISTRY)
+SERVICE_FAILURES = Counter("sentinela_service_failures_total", "Falhas por serviço", ["service"], registry=REGISTRY)
+SERVICE_READY_GAUGE = Gauge("sentinela_service_ready", "Readiness do serviço", ["service"], registry=REGISTRY)
 HOSTILE_CAMPAIGN_THRESHOLD = 8
 SENSITIVE_PORTS = {22, 23, 3389, 445, 5432, 3306, 6379, 9200}
 PRIVILEGED_USERS = {"admin", "root", "administrator"}
@@ -1045,6 +1062,7 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
 
 
 def create_consumer():
+    global SERVICE_READY
     attempt = 0
     while True:
         try:
@@ -1057,8 +1075,13 @@ def create_consumer():
                 value_deserializer=lambda message: json.loads(message.decode("utf-8")),
             )
             log_json("INFO", "Kafka conectado", topic=RAW_LOGS_TOPIC)
+            SERVICE_READY = True
+            SERVICE_READY_GAUGE.labels(service="rule_engine").set(1)
             return consumer
         except Exception as exc:
+            SERVICE_READY = False
+            SERVICE_READY_GAUGE.labels(service="rule_engine").set(0)
+            SERVICE_FAILURES.labels(service="rule_engine").inc()
             delay = backoff_delay(attempt)
             log_json("WARN", "Aguardando Kafka consumer", error=str(exc), retry_in_seconds=delay)
             time.sleep(delay)
@@ -1066,6 +1089,7 @@ def create_consumer():
 
 
 def create_producer():
+    global SERVICE_READY
     attempt = 0
     while True:
         try:
@@ -1074,8 +1098,13 @@ def create_producer():
                 value_serializer=lambda value: json.dumps(value, ensure_ascii=False).encode("utf-8"),
             )
             log_json("INFO", "Kafka producer conectado", topic=ALERTS_TOPIC)
+            SERVICE_READY = True
+            SERVICE_READY_GAUGE.labels(service="rule_engine").set(1)
             return producer
         except Exception as exc:
+            SERVICE_READY = False
+            SERVICE_READY_GAUGE.labels(service="rule_engine").set(0)
+            SERVICE_FAILURES.labels(service="rule_engine").inc()
             delay = backoff_delay(attempt)
             log_json("WARN", "Aguardando Kafka producer", error=str(exc), retry_in_seconds=delay)
             time.sleep(delay)
@@ -1083,17 +1112,22 @@ def create_producer():
 
 
 def process_log(log, producer, rules):
+    start_time = time.time()
+    EVENTS_CONSUMED.inc()
+    KAFKA_CONSUMED.labels(service="rule_engine", topic=RAW_LOGS_TOPIC).inc()
     if "event_id" not in log:
         log["event_id"] = str(uuid.uuid4())
 
     ip = normalize_source_ip(log)
     if not ip:
+        SERVICE_FAILURES.labels(service="rule_engine").inc()
         log_json("WARN", "Evento descartado sem IP", event_id=log["event_id"], raw_event=log)
         return
     log["ip"] = ip
 
     events = update_state(log)
     threat = enrich_threat_intel(ip)
+    RULES_EXECUTED.inc(len(rules or []))
     status, risk, risk_reasons = calculate_risk(log, events, threat, rules)
     correlation_key, correlation_reason = build_correlation(events, log)
     auto_response, simulated_block = simulated_auto_response(status, risk, threat is not None)
@@ -1101,6 +1135,14 @@ def process_log(log, producer, rules):
 
     producer.send(ALERTS_TOPIC, alert)
     producer.flush(timeout=2)
+    ALERTS_PUBLISHED.inc()
+    if alert.get("alert_type") in {"incident_candidate", "campaign"} or int(alert.get("score_final") or 0) >= 70:
+        INCIDENTS_GENERATED.labels(severity=alert.get("severity", "UNKNOWN")).inc()
+    if status != "TRÁFEGO NORMAL" or int(risk or 0) >= 35:
+        MATCHING_EVENTS.inc()
+    CORRELATION_SECONDS.observe(time.time() - start_time)
+    event_epoch = parse_epoch(log.get("ts") or log.get("timestamp") or time.time())
+    PIPELINE_LATENCY_SECONDS.observe(max(0, time.time() - event_epoch))
 
     log_json(
         "INFO",
@@ -1123,6 +1165,7 @@ def process_log(log, producer, rules):
 
 
 def run():
+    start_ops_server()
     log_json("INFO", "Motor de regras Sentinela iniciado", enable_block=ENABLE_BLOCK)
     rules = load_rules()
 
@@ -1133,8 +1176,37 @@ def run():
             for message in consumer:
                 process_log(message.value, producer, rules)
         except Exception as exc:
+            SERVICE_FAILURES.labels(service="rule_engine").inc()
             log_json("ERROR", "Erro no loop do Rule Engine; reconectando", error=str(exc))
             time.sleep(backoff_delay(0))
+
+
+class OpsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200 if SERVICE_READY else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            payload = {"status": "ok"} if SERVICE_READY else {"status": "error", "dependencies": {"kafka": "unavailable"}}
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+        if self.path == "/metrics":
+            data = generate_latest(REGISTRY)
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *args):
+        return
+
+
+def start_ops_server():
+    server = ThreadingHTTPServer(("0.0.0.0", METRICS_PORT), OpsHandler)
+    Thread(target=server.serve_forever, daemon=True).start()
 
 
 if __name__ == "__main__":

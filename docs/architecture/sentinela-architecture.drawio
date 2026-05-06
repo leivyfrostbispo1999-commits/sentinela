@@ -1,0 +1,32 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="sentinela-soc" name="SENTINELA SOC 6.0">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="log" value="log_collector&#xa;/health /metrics" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="60" y="120" width="160" height="70" as="geometry"/></mxCell>
+        <mxCell id="sim" value="simulator&#xa;defensive scenarios" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="60" y="240" width="160" height="70" as="geometry"/></mxCell>
+        <mxCell id="kafka1" value="Kafka&#xa;raw_logs" style="shape=cylinder3d;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="300" y="170" width="150" height="90" as="geometry"/></mxCell>
+        <mxCell id="rule" value="rule_engine&#xa;rules + correlation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="530" y="170" width="180" height="90" as="geometry"/></mxCell>
+        <mxCell id="kafka2" value="Kafka&#xa;security_alerts" style="shape=cylinder3d;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="790" y="170" width="150" height="90" as="geometry"/></mxCell>
+        <mxCell id="sink" value="alert_sink&#xa;persist + incidents" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="1010" y="170" width="180" height="90" as="geometry"/></mxCell>
+        <mxCell id="db" value="Postgres&#xa;alertas incidents audit" style="shape=cylinder3d;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="1030" y="330" width="150" height="90" as="geometry"/></mxCell>
+        <mxCell id="api" value="dashboard_api&#xa;REST reports metrics" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="780" y="330" width="180" height="90" as="geometry"/></mxCell>
+        <mxCell id="web" value="dashboard_web&#xa;SOC UI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="540" y="330" width="160" height="70" as="geometry"/></mxCell>
+        <mxCell id="prom" value="Prometheus&#xa;scrape /metrics" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="370" y="520" width="180" height="80" as="geometry"/></mxCell>
+        <mxCell id="graf" value="Grafana&#xa;dashboards" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="620" y="520" width="180" height="80" as="geometry"/></mxCell>
+        <mxCell id="redis" value="Redis&#xa;correlation state" style="shape=cylinder3d;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="540" y="40" width="150" height="80" as="geometry"/></mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="log" target="kafka1" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="sim" target="kafka1" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="kafka1" target="rule" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="rule" target="kafka2" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="kafka2" target="sink" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="sink" target="db" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="api" target="db" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="web" target="api" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="rule" target="redis" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="prom" target="graf" style="endArrow=block;html=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

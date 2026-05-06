@@ -5,13 +5,22 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 from kafka import KafkaProducer
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
+METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
+SERVICE_READY = False
+
+SIMULATED_EVENTS = Counter("sentinela_simulator_events_total", "Eventos simulados publicados", ["scenario", "event_type"])
+SIMULATOR_FAILURES = Counter("sentinela_service_failures_total", "Falhas por serviço", ["service"])
+SERVICE_READY_GAUGE = Gauge("sentinela_service_ready", "Readiness do serviço", ["service"])
 
 THREAT_INTEL_IPS = [
     "45.67.89.12",
@@ -75,6 +84,7 @@ def backoff_delay(attempt):
 
 
 def create_producer():
+    global SERVICE_READY
     attempt = 0
     while True:
         try:
@@ -83,30 +93,45 @@ def create_producer():
                 value_serializer=lambda value: json.dumps(value, ensure_ascii=False).encode("utf-8"),
             )
             log_json("INFO", "Kafka conectado", topic=RAW_LOGS_TOPIC)
+            SERVICE_READY = True
+            SERVICE_READY_GAUGE.labels(service="simulator").set(1)
             return producer
         except Exception as exc:
+            SERVICE_READY = False
+            SERVICE_READY_GAUGE.labels(service="simulator").set(0)
+            SIMULATOR_FAILURES.labels(service="simulator").inc()
             delay = backoff_delay(attempt)
             log_json("WARN", "Aguardando Kafka", error=str(exc), retry_in_seconds=delay)
             time.sleep(delay)
             attempt += 1
 
 
-def build_event(ip, event_type, port):
+def build_event(ip, event_type, port, scenario="generic", **extra):
     return {
         "event_id": str(uuid.uuid4()),
         "ip": ip,
+        "source_ip": ip,
         "event_type": event_type,
+        "event": event_type.lower(),
         "port": port,
         "service": SERVICES.get(port, "unknown"),
         "timestamp": now_iso(),
         "ts": now_iso(),
+        "scenario": scenario,
+        "target_host": extra.get("target_host", "sentinela-prod-sim"),
+        "target_ip": extra.get("target_ip", random.choice(["10.10.1.20", "10.10.2.15", "10.10.3.8"])),
+        "username": extra.get("username"),
+        "bytes": extra.get("bytes"),
+        "destination_ip": extra.get("destination_ip"),
+        "geo_change": extra.get("geo_change"),
     }
 
 
-def send_event(producer, ip, event_type, port):
-    event = build_event(ip, event_type, port)
+def send_event(producer, ip, event_type, port, scenario="generic", **extra):
+    event = build_event(ip, event_type, port, scenario=scenario, **extra)
     producer.send(RAW_LOGS_TOPIC, event)
     producer.flush(timeout=2)
+    SIMULATED_EVENTS.labels(scenario=scenario, event_type=event_type).inc()
     log_json(
         "INFO",
         "Evento enviado",
@@ -125,15 +150,15 @@ def simulate_multistage_attack(producer, ip):
     log_json("WARN", "Sequência multiestágio iniciada", ip=ip)
 
     for _ in range(random.randint(3, 6)):
-        send_event(producer, ip, "PORT_SCAN", random.choice(SENSITIVE_PORTS))
+        send_event(producer, ip, "PORT_SCAN", random.choice(SENSITIVE_PORTS), scenario="multi_stage")
         short_pause()
 
     for _ in range(random.randint(3, 7)):
-        send_event(producer, ip, "BRUTE_FORCE", random.choice([22, 23, 3389]))
+        send_event(producer, ip, "BRUTE_FORCE", random.choice([22, 23, 3389]), scenario="multi_stage", username=random.choice(["admin", "root", "svc-backup"]))
         short_pause()
 
     for _ in range(random.randint(1, 3)):
-        send_event(producer, ip, "SUSPICIOUS", random.choice(SENSITIVE_PORTS))
+        send_event(producer, ip, "SUSPICIOUS", random.choice(SENSITIVE_PORTS), scenario="multi_stage")
         short_pause()
 
 
@@ -142,18 +167,56 @@ def simulate_burst(producer, ip):
     for _ in range(random.randint(8, 13)):
         event_type = random.choice(["PORT_SCAN", "BRUTE_FORCE", "SUSPICIOUS"])
         port = random.choice(SENSITIVE_PORTS)
-        send_event(producer, ip, event_type, port)
+        send_event(producer, ip, event_type, port, scenario="burst")
         time.sleep(random.uniform(0.12, 0.45))
+
+
+def simulate_brute_force(producer, ip):
+    for _ in range(random.randint(8, 16)):
+        send_event(producer, ip, "BRUTE_FORCE", random.choice([22, 3389]), scenario="brute_force", username=random.choice(["admin", "root", "administrator"]))
+        time.sleep(random.uniform(0.08, 0.22))
+
+
+def simulate_port_scan(producer, ip):
+    for port in random.sample(SENSITIVE_PORTS + NORMAL_PORTS, k=random.randint(6, 10)):
+        send_event(producer, ip, "PORT_SCAN", port, scenario="port_scan")
+        time.sleep(random.uniform(0.05, 0.18))
+
+
+def simulate_beaconing(producer, ip):
+    destination = random.choice(["198.51.100.200", "203.0.113.77", "185.220.101.44"])
+    for _ in range(random.randint(4, 8)):
+        send_event(producer, ip, "BEACONING", 443, scenario="beaconing", destination_ip=destination, bytes=random.randint(120, 480))
+        time.sleep(random.uniform(0.18, 0.5))
+
+
+def simulate_lateral_movement(producer, ip):
+    for port in [445, 3389, 5985, 22]:
+        send_event(producer, ip, "LATERAL_MOVEMENT", port, scenario="lateral_movement", username=random.choice(["svc-deploy", "admin", "backup"]))
+        time.sleep(random.uniform(0.12, 0.35))
+
+
+def simulate_login_anomaly(producer, ip):
+    for _ in range(random.randint(3, 6)):
+        send_event(producer, ip, "SUSPICIOUS_LOGIN", random.choice([22, 443, 8080]), scenario="login_anomaly", username=random.choice(["financeiro", "admin", "devops"]), geo_change=True)
+        time.sleep(random.uniform(0.18, 0.4))
+
+
+def simulate_exfiltration(producer, ip):
+    for _ in range(random.randint(3, 7)):
+        send_event(producer, ip, "EXFILTRATION", random.choice([443, 8080]), scenario="exfiltration", destination_ip=random.choice(["198.51.100.220", "203.0.113.88"]), bytes=random.randint(500000, 2500000))
+        time.sleep(random.uniform(0.1, 0.28))
 
 
 def simulate_normal_traffic(producer):
     ip = random.choice(NORMAL_IPS)
     event_type = random.choice(["NORMAL", "HTTP_REQUEST", "DNS_QUERY"])
     port = random.choice(NORMAL_PORTS)
-    send_event(producer, ip, event_type, port)
+    send_event(producer, ip, event_type, port, scenario="normal")
 
 
 def run():
+    start_ops_server()
     producer = create_producer()
     log_json("INFO", "SENTINELA simulator started")
 
@@ -163,17 +226,56 @@ def run():
 
             if scenario < 0.25:
                 simulate_normal_traffic(producer)
-            elif scenario < 0.55:
-                simulate_multistage_attack(producer, random.choice(PERSISTENT_ATTACKERS))
+            elif scenario < 0.38:
+                simulate_brute_force(producer, random.choice(PERSISTENT_ATTACKERS))
+            elif scenario < 0.50:
+                simulate_port_scan(producer, random.choice(PERSISTENT_ATTACKERS))
+            elif scenario < 0.62:
+                simulate_beaconing(producer, random.choice(THREAT_INTEL_IPS))
+            elif scenario < 0.72:
+                simulate_lateral_movement(producer, random.choice(PERSISTENT_ATTACKERS))
             elif scenario < 0.82:
-                simulate_multistage_attack(producer, random.choice(THREAT_INTEL_IPS))
+                simulate_login_anomaly(producer, random.choice(PERSISTENT_ATTACKERS + THREAT_INTEL_IPS))
+            elif scenario < 0.90:
+                simulate_exfiltration(producer, random.choice(THREAT_INTEL_IPS))
+            elif scenario < 0.95:
+                simulate_multistage_attack(producer, random.choice(PERSISTENT_ATTACKERS))
             else:
                 simulate_burst(producer, random.choice(THREAT_INTEL_IPS + PERSISTENT_ATTACKERS))
 
             time.sleep(random.uniform(1.0, 3.2))
         except Exception as exc:
+            SIMULATOR_FAILURES.labels(service="simulator").inc()
             log_json("ERROR", "Falha no simulador; reconectando", error=str(exc))
             producer = create_producer()
+
+
+class OpsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200 if SERVICE_READY else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            payload = {"status": "ok"} if SERVICE_READY else {"status": "error", "dependencies": {"kafka": "unavailable"}}
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+        if self.path == "/metrics":
+            data = generate_latest()
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *args):
+        return
+
+
+def start_ops_server():
+    server = ThreadingHTTPServer(("0.0.0.0", METRICS_PORT), OpsHandler)
+    Thread(target=server.serve_forever, daemon=True).start()
 
 
 if __name__ == "__main__":

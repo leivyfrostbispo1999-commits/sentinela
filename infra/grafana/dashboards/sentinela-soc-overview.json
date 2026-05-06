@@ -1,0 +1,71 @@
+{
+  "uid": "sentinela-soc-overview",
+  "title": "SENTINELA SOC - Operational Overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["sentinela", "soc", "siem"],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Eventos/min",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "sentinela_events_processed_per_minute", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Alertas persistidos",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "sentinela_alert_sink_alerts_persisted_total", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Incidentes",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "sentinela_incidents_stored_total", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Falhas por servico",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "sum(sentinela_service_failures_total)", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Throughput Kafka",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (service, topic) (rate(sentinela_kafka_messages_consumed_total[1m]))", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latencia do pipeline p95",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(sentinela_pipeline_latency_seconds_bucket[5m])) by (le))", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "API HTTP p95",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(sentinela_dashboard_request_seconds_bucket[5m])) by (le, endpoint))", "refId": "A"}]
+    },
+    {
+      "type": "bargauge",
+      "title": "Incidentes por severidade",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "targets": [{"expr": "sentinela_incidents_by_severity", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Correlacao p95",
+      "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(sentinela_rule_engine_correlation_seconds_bucket[5m])) by (le))", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Erros HTTP",
+      "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (status_class) (rate(sentinela_dashboard_http_errors_total[5m]))", "refId": "A"}]
+    }
+  ]
+}

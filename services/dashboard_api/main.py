@@ -6,6 +6,7 @@ import os
 import re
 import time
 import uuid
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -13,7 +14,7 @@ from pathlib import Path
 import psycopg2
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
-from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, PlatformCollector, ProcessCollector, generate_latest
 
 try:
     import yaml
@@ -22,7 +23,8 @@ except ImportError:
 
 
 app = Flask(__name__)
-CORS(app)
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+CORS(app, resources={r"/*": {"origins": CORS_ORIGINS.split(",") if CORS_ORIGINS != "*" else "*"}})
 SCHEMA_INITIALIZED = False
 
 DB_CONFIG = {
@@ -40,6 +42,7 @@ ENABLE_AUTH = os.getenv("ENABLE_AUTH", "false").lower() == "true"
 SENTINELA_USER = os.getenv("SENTINELA_USER", "admin")
 SENTINELA_PASSWORD = os.getenv("SENTINELA_PASSWORD", "sentinela")
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "10"))
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "240"))
 RULES_CANDIDATES = [
     Path(os.getenv("RULES_PATH", "sentinela_rules.yml")),
     Path("config/sentinela_rules.yml"),
@@ -67,13 +70,34 @@ REAL_MITRE_ID_PATTERN = re.compile(r"^T\d{4}(?:\.\d{3})?$")
 SEVERITY_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
 REGISTRY = CollectorRegistry()
+ProcessCollector(namespace="sentinela_dashboard_api", registry=REGISTRY)
+PlatformCollector(registry=REGISTRY)
 REQUEST_COUNTER = Counter(
     "sentinela_dashboard_requests_total",
     "Total de requests por endpoint",
     ["endpoint"],
     registry=REGISTRY,
 )
+HTTP_REQUEST_COUNTER = Counter(
+    "sentinela_dashboard_http_requests_total",
+    "Requests HTTP por endpoint, metodo e status",
+    ["endpoint", "method", "status"],
+    registry=REGISTRY,
+)
+REQUEST_LATENCY = Histogram(
+    "sentinela_dashboard_request_seconds",
+    "Tempo de resposta da API",
+    ["endpoint", "method"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    registry=REGISTRY,
+)
+HTTP_ERRORS = Counter("sentinela_dashboard_http_errors_total", "Erros HTTP por classe", ["status_class"], registry=REGISTRY)
 DEMO_COUNTER = Counter("sentinela_demo_incidents_total", "Total de incidentes demo executados", registry=REGISTRY)
+ALERTS_GAUGE = Gauge("sentinela_alerts_stored_total", "Total de alertas persistidos", registry=REGISTRY)
+INCIDENTS_GAUGE = Gauge("sentinela_incidents_stored_total", "Total de incidentes persistidos", registry=REGISTRY)
+INCIDENTS_SEVERITY_GAUGE = Gauge("sentinela_incidents_by_severity", "Incidentes persistidos por severidade", ["severity"], registry=REGISTRY)
+EVENTS_PER_MINUTE_GAUGE = Gauge("sentinela_events_processed_per_minute", "Eventos processados por minuto", registry=REGISTRY)
+RATE_LIMIT_BUCKETS = defaultdict(deque)
 
 
 def now_iso():
@@ -93,6 +117,38 @@ def log_json(level, message, **fields):
 
 def backoff_delay(attempt):
     return min(MAX_BACKOFF_SECONDS, 1.5 * (2 ** min(attempt, 4)))
+
+
+@app.before_request
+def begin_request_timer():
+    request._sentinela_started_at = time.time()
+    if request.path in {"/health", "/metrics", "/metrics/prometheus"}:
+        return None
+    now = time.time()
+    client = request.headers.get("X-Forwarded-For", request.remote_addr or "local").split(",")[0].strip()
+    bucket = RATE_LIMIT_BUCKETS[client]
+    while bucket and now - bucket[0] > 60:
+        bucket.popleft()
+    if len(bucket) >= RATE_LIMIT_PER_MINUTE:
+        return jsonify({"error": "rate_limited", "limit_per_minute": RATE_LIMIT_PER_MINUTE}), 429
+    bucket.append(now)
+    return None
+
+
+@app.after_request
+def record_request_metrics(response):
+    endpoint = request.endpoint or request.path
+    method = request.method
+    status = str(response.status_code)
+    HTTP_REQUEST_COUNTER.labels(endpoint=endpoint, method=method, status=status).inc()
+    REQUEST_LATENCY.labels(endpoint=endpoint, method=method).observe(time.time() - getattr(request, "_sentinela_started_at", time.time()))
+    if response.status_code >= 400:
+        HTTP_ERRORS.labels(status_class=f"{response.status_code // 100}xx").inc()
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    return response
 
 
 def get_connection():
@@ -443,6 +499,18 @@ def range_to_interval(range_value):
         days = int(value[:-1])
         return f"{days} day" if days == 1 else f"{days} days"
     return "5 minutes"
+
+
+def pagination_params(default_limit=100, max_limit=500):
+    try:
+        limit = int(request.args.get("limit", default_limit))
+    except (TypeError, ValueError):
+        limit = default_limit
+    try:
+        offset = int(request.args.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
+    return max(1, min(limit, max_limit)), max(0, offset)
 
 
 def severity_from_score(score):
@@ -1367,15 +1435,22 @@ def materialize_incidents(conn, alerts):
     return materialized
 
 
-def fetch_persisted_incidents(conn, limit=100):
+def fetch_persisted_incidents(conn, limit=100, offset=0):
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM incidents ORDER BY last_seen DESC, max_score DESC LIMIT %s", (limit,))
+        cur.execute("SELECT * FROM incidents ORDER BY last_seen DESC, max_score DESC LIMIT %s OFFSET %s", (limit, offset))
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
     return [item for item in (row_to_incident(row, columns) for row in rows) if item]
 
 
-def fetch_incident_alerts(conn, incident_id):
+def count_persisted_incidents(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM incidents")
+        row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def fetch_incident_alerts(conn, incident_id, limit=500, offset=0):
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1384,12 +1459,27 @@ def fetch_incident_alerts(conn, incident_id):
             JOIN alertas a ON ia.alert_id = COALESCE(a.event_id::text, a.id::text)
             WHERE ia.incident_id = %s
             ORDER BY a.ts ASC
+            LIMIT %s OFFSET %s
             """,
-            (incident_id,),
+            (incident_id, limit, offset),
         )
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
     return [enrich_alert(row_to_dict(row, columns)) for row in rows]
+
+
+def count_incident_alerts(conn, incident_id):
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM incident_alerts WHERE incident_id = %s", (incident_id,))
+        row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def count_linked_alerts(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(DISTINCT alert_id) FROM incident_alerts")
+        row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
 
 
 def fetch_incident_audit(conn, incident_id):
@@ -1639,7 +1729,6 @@ def increment_bucket(mapping, key, amount=1):
 
 def build_metrics_payload(conn):
     alerts = metric_rows(conn)
-    materialize_incidents(conn, alerts)
     incidents = fetch_persisted_incidents(conn)
     alerts_by_hour = {}
     score_by_time = []
@@ -1672,10 +1761,7 @@ def build_metrics_payload(conn):
         if len(json_list(incident.get("source_ips"))) > 1:
             multi_ip_incidents += 1
     top_ips = sorted(by_ip.values(), key=lambda item: (item["max_score"], item["event_count"]), reverse=True)
-    linked_alert_ids = set()
-    for incident in incidents:
-        for alert in fetch_incident_alerts(conn, incident["incident_id"]):
-            linked_alert_ids.add(alert_id_value(alert))
+    linked_alert_count = count_linked_alerts(conn)
     return {
         "generated_at": now_iso(),
         "total_alerts": len(alerts),
@@ -1699,8 +1785,8 @@ def build_metrics_payload(conn):
         )[:5],
         "multi_ip_incidents": multi_ip_incidents,
         "top_mitre_techniques": mitre_frequency,
-        "alerts_linked_to_incidents": len(linked_alert_ids),
-        "unlinked_alerts": max(0, len(alerts) - len(linked_alert_ids)),
+        "alerts_linked_to_incidents": linked_alert_count,
+        "unlinked_alerts": max(0, len(alerts) - linked_alert_count),
         "reports_generated": 0,
         "eventos_por_tipo": events_by_type,
         "replay_vs_normal": replay_vs_normal,
@@ -1987,6 +2073,19 @@ def summarize_incident(alerts):
     return f"Ataque controlado detectado a partir do IP {attacker}. A correlação elevou o incidente para CRITICAL e registrou bloqueio simulado apenas, sem bloqueio real."
 
 
+def refresh_prometheus_db_gauges(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM alertas")
+        ALERTS_GAUGE.set(int((cur.fetchone() or [0])[0] or 0))
+        cur.execute("SELECT COUNT(*) FROM incidents")
+        INCIDENTS_GAUGE.set(int((cur.fetchone() or [0])[0] or 0))
+        cur.execute("SELECT COALESCE(severity, 'UNKNOWN'), COUNT(*) FROM incidents GROUP BY COALESCE(severity, 'UNKNOWN')")
+        for severity, total in cur.fetchall() or []:
+            INCIDENTS_SEVERITY_GAUGE.labels(severity=severity).set(int(total or 0))
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE ts >= NOW() - INTERVAL '1 minute'")
+        EVENTS_PER_MINUTE_GAUGE.set(int((cur.fetchone() or [0])[0] or 0))
+
+
 @app.get("/health")
 def health():
     try:
@@ -1995,7 +2094,7 @@ def health():
             cur.execute("SELECT 1")
             cur.fetchone()
         conn.close()
-        return jsonify({"status": "ok"})
+        return jsonify({"status": "ok", "dependencies": {"postgres": "ok"}, "ready": SCHEMA_INITIALIZED})
     except Exception as exc:
         return jsonify({"status": "error", "error": str(exc)}), 503
 
@@ -2004,19 +2103,23 @@ def health():
 @require_auth
 def metrics():
     REQUEST_COUNTER.labels(endpoint="metrics").inc()
-    if request.args.get("format") == "prometheus" or "text/plain" in (request.headers.get("Accept") or ""):
-        return app.response_class(generate_latest(REGISTRY), mimetype=CONTENT_TYPE_LATEST)
     conn = ensure_connection()
     try:
-        return jsonify(build_metrics_payload(conn))
+        refresh_prometheus_db_gauges(conn)
     finally:
         conn.close()
+    return app.response_class(generate_latest(REGISTRY), mimetype=CONTENT_TYPE_LATEST)
 
 
 @app.get("/metrics/prometheus")
 @require_auth
 def metrics_prometheus():
     REQUEST_COUNTER.labels(endpoint="metrics_prometheus").inc()
+    conn = ensure_connection()
+    try:
+        refresh_prometheus_db_gauges(conn)
+    finally:
+        conn.close()
     return app.response_class(generate_latest(REGISTRY), mimetype=CONTENT_TYPE_LATEST)
 
 
@@ -2165,12 +2268,13 @@ def investigate_ip(source_ip):
 @require_auth
 def incidents():
     REQUEST_COUNTER.labels(endpoint="incidents").inc()
+    limit, offset = pagination_params(default_limit=100, max_limit=500)
     conn = ensure_connection()
     try:
         alerts = fetch_alert_rows(conn, limit=500)
         materialize_incidents(conn, alerts)
-        data = [enrich_incident_detail(conn, item) for item in fetch_persisted_incidents(conn)]
-        return jsonify({"count": len(data), "data": data})
+        data = fetch_persisted_incidents(conn, limit=limit, offset=offset)
+        return jsonify({"count": len(data), "total": count_persisted_incidents(conn), "limit": limit, "offset": offset, "data": data})
     finally:
         conn.close()
 
@@ -2181,9 +2285,12 @@ def incident_detail(incident_id):
     REQUEST_COUNTER.labels(endpoint="incident_detail").inc()
     conn = ensure_connection()
     try:
-        alerts = fetch_alert_rows(conn, limit=500)
-        materialize_incidents(conn, alerts)
+        alerts = []
         incident = enrich_incident_detail(conn, fetch_incident_by_id(conn, incident_id))
+        if not incident:
+            alerts = fetch_alert_rows(conn, limit=500)
+            materialize_incidents(conn, alerts)
+            incident = enrich_incident_detail(conn, fetch_incident_by_id(conn, incident_id))
         if not incident:
             for item in build_incidents(alerts, fetch_incident_overrides(conn)):
                 if item["incident_id"] == incident_id:
@@ -2280,12 +2387,13 @@ def update_incident(incident_id):
 @require_auth
 def incident_alerts(incident_id):
     REQUEST_COUNTER.labels(endpoint="incident_alerts").inc()
+    limit, offset = pagination_params(default_limit=100, max_limit=500)
     conn = ensure_connection()
     try:
         if not fetch_incident_by_id(conn, incident_id):
             materialize_incidents(conn, fetch_alert_rows(conn, limit=500))
-        alerts = fetch_incident_alerts(conn, incident_id)
-        return jsonify({"incident_id": incident_id, "count": len(alerts), "data": alerts})
+        alerts = fetch_incident_alerts(conn, incident_id, limit=limit, offset=offset)
+        return jsonify({"incident_id": incident_id, "count": len(alerts), "total": count_incident_alerts(conn, incident_id), "limit": limit, "offset": offset, "data": alerts})
     finally:
         conn.close()
 
@@ -2429,9 +2537,12 @@ def incident_report(incident_id):
     REQUEST_COUNTER.labels(endpoint="incident_report").inc()
     conn = ensure_connection()
     try:
-        alerts = fetch_alert_rows(conn, limit=500)
-        materialize_incidents(conn, alerts)
+        alerts = []
         incident = enrich_incident_detail(conn, fetch_incident_by_id(conn, incident_id))
+        if not incident:
+            alerts = fetch_alert_rows(conn, limit=500)
+            materialize_incidents(conn, alerts)
+            incident = enrich_incident_detail(conn, fetch_incident_by_id(conn, incident_id))
         if not incident:
             for item in build_incidents(alerts, fetch_incident_overrides(conn)):
                 if item["incident_id"] == incident_id:
@@ -2450,9 +2561,12 @@ def incident_report_pdf(incident_id):
     REQUEST_COUNTER.labels(endpoint="incident_report_pdf").inc()
     conn = ensure_connection()
     try:
-        alerts = fetch_alert_rows(conn, limit=500)
-        materialize_incidents(conn, alerts)
+        alerts = []
         incident = enrich_incident_detail(conn, fetch_incident_by_id(conn, incident_id))
+        if not incident:
+            alerts = fetch_alert_rows(conn, limit=500)
+            materialize_incidents(conn, alerts)
+            incident = enrich_incident_detail(conn, fetch_incident_by_id(conn, incident_id))
         if not incident:
             for item in build_incidents(alerts, fetch_incident_overrides(conn)):
                 if item["incident_id"] == incident_id:

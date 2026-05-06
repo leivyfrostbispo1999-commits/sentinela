@@ -4,11 +4,14 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import psycopg2
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, TopicPartition
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -28,6 +31,19 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 SENTINELA_VERSION = "SENTINELA SOC 6.0"
 INCIDENT_WINDOW_SECONDS = int(os.getenv("INCIDENT_WINDOW_SECONDS", "600"))
 SEVERITY_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
+KAFKA_READY = False
+DB_READY = False
+
+ALERTS_CONSUMED = Counter("sentinela_alert_sink_alerts_consumed_total", "Alertas consumidos do Kafka")
+ALERTS_PERSISTED = Counter("sentinela_alert_sink_alerts_persisted_total", "Alertas persistidos no Postgres")
+WRITE_FAILURES = Counter("sentinela_alert_sink_write_failures_total", "Falhas de escrita no Postgres")
+INCIDENTS_BY_SEVERITY = Counter("sentinela_incidents_total", "Incidentes por severidade", ["severity"])
+KAFKA_CONSUMED = Counter("sentinela_kafka_messages_consumed_total", "Mensagens consumidas do Kafka", ["service", "topic"])
+KAFKA_LAG = Gauge("sentinela_kafka_consumer_lag", "Lag local observado por particao Kafka", ["service", "topic", "partition"])
+PIPELINE_LATENCY_SECONDS = Histogram("sentinela_pipeline_latency_seconds", "Latencia entre timestamp do alerta e persistencia", buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60))
+SERVICE_FAILURES = Counter("sentinela_service_failures_total", "Falhas por serviço", ["service"])
+SERVICE_READY_GAUGE = Gauge("sentinela_service_ready", "Readiness do serviço", ["service"])
 
 
 def now_iso():
@@ -49,15 +65,25 @@ def backoff_delay(attempt):
     return min(MAX_BACKOFF_SECONDS, 1.5 * (2 ** min(attempt, 4)))
 
 
+def update_ready_gauge():
+    SERVICE_READY_GAUGE.labels(service="alert_sink").set(1 if KAFKA_READY and DB_READY else 0)
+
+
 def connect_postgres():
+    global DB_READY
     attempt = 0
     while True:
         try:
             conn = psycopg2.connect(**DB_CONFIG)
             conn.autocommit = False
             log_json("INFO", "Postgres conectado", host=DB_CONFIG["host"], port=DB_CONFIG["port"])
+            DB_READY = True
+            update_ready_gauge()
             return conn
         except Exception as exc:
+            DB_READY = False
+            update_ready_gauge()
+            SERVICE_FAILURES.labels(service="alert_sink").inc()
             delay = backoff_delay(attempt)
             log_json("WARN", "Aguardando Postgres", error=str(exc), retry_in_seconds=delay)
             time.sleep(delay)
@@ -278,6 +304,7 @@ def ensure_schema(conn):
 
 
 def create_consumer():
+    global KAFKA_READY
     attempt = 0
     while True:
         try:
@@ -290,8 +317,13 @@ def create_consumer():
                 value_deserializer=lambda message: json.loads(message.decode("utf-8")),
             )
             log_json("INFO", "Kafka conectado", topic=ALERTS_TOPIC)
+            KAFKA_READY = True
+            update_ready_gauge()
             return consumer
         except Exception as exc:
+            KAFKA_READY = False
+            update_ready_gauge()
+            SERVICE_FAILURES.labels(service="alert_sink").inc()
             delay = backoff_delay(attempt)
             log_json("WARN", "Aguardando Kafka", error=str(exc), retry_in_seconds=delay)
             time.sleep(delay)
@@ -558,9 +590,13 @@ def send_notifications(alert):
 
 
 def persist_alert(conn, alert):
+    started = time.time()
+    ALERTS_CONSUMED.inc()
+    KAFKA_CONSUMED.labels(service="alert_sink", topic=ALERTS_TOPIC).inc()
     event_id = ensure_event_id(alert)
     ip = alert.get("ip")
     if not ip:
+        WRITE_FAILURES.inc()
         log_json("WARN", "Alerta descartado sem IP", event_id=event_id)
         return
 
@@ -777,11 +813,22 @@ def persist_alert(conn, alert):
 
     incident_id = persist_incident_for_alert(conn, alert)
     conn.commit()
+    ALERTS_PERSISTED.inc()
+    INCIDENTS_BY_SEVERITY.labels(severity=alert.get("severity", "UNKNOWN")).inc()
+    PIPELINE_LATENCY_SECONDS.observe(max(0, time.time() - parse_alert_epoch(alert.get("ts"))))
     log_json("INFO", "Alerta gravado", event_id=event_id, ip=ip, status=alert.get("status"), incident_id=incident_id)
     send_notifications(alert)
 
 
+def parse_alert_epoch(value):
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return time.time()
+
+
 def run():
+    start_ops_server()
     consumer = create_consumer()
     conn = connect_postgres()
     ensure_schema(conn)
@@ -790,8 +837,17 @@ def run():
         try:
             for message in consumer:
                 persist_alert(conn, message.value)
+                try:
+                    topic_partition = TopicPartition(message.topic, message.partition)
+                    end_offsets = consumer.end_offsets([topic_partition])
+                    lag = max(0, end_offsets.get(topic_partition, message.offset + 1) - message.offset - 1)
+                    KAFKA_LAG.labels(service="alert_sink", topic=ALERTS_TOPIC, partition=str(message.partition)).set(lag)
+                except Exception:
+                    pass
                 consumer.commit()
         except psycopg2.Error as exc:
+            WRITE_FAILURES.inc()
+            SERVICE_FAILURES.labels(service="alert_sink").inc()
             log_json("ERROR", "Erro no Postgres; reconectando", error=str(exc))
             try:
                 conn.close()
@@ -800,9 +856,39 @@ def run():
             conn = connect_postgres()
             ensure_schema(conn)
         except Exception as exc:
+            SERVICE_FAILURES.labels(service="alert_sink").inc()
             log_json("ERROR", "Erro no Alert Sink; reconectando", error=str(exc))
             time.sleep(backoff_delay(0))
             consumer = create_consumer()
+
+
+class OpsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            ready = KAFKA_READY and DB_READY
+            self.send_response(200 if ready else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            payload = {"status": "ok"} if ready else {"status": "error", "dependencies": {"kafka": KAFKA_READY, "postgres": DB_READY}}
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+        if self.path == "/metrics":
+            data = generate_latest()
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *args):
+        return
+
+
+def start_ops_server():
+    server = ThreadingHTTPServer(("0.0.0.0", METRICS_PORT), OpsHandler)
+    Thread(target=server.serve_forever, daemon=True).start()
 
 
 if __name__ == "__main__":

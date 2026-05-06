@@ -644,3 +644,132 @@ README.md
 - Add service-level metrics for Kafka lag, Redis health and processing latency.
 - Add Grafana dashboards.
 - Add integration tests with Docker Compose.
+# SENTINELA SOC 6.0 - SOC/SIEM Lab Modernizado
+
+> Atualizacao operacional: o projeto agora inclui observabilidade Prometheus/Grafana, healthchecks reais, testes de carga k6, migracoes Alembic, documentacao visual e artefatos cloud-ready. O pipeline original foi preservado:
+>
+> `log_collector -> Kafka raw_logs -> rule_engine -> Kafka security_alerts -> alert_sink -> Postgres -> dashboard_api -> dashboard_web`
+
+## Stack principal
+
+- Python workers: `log_collector`, `simulator`, `rule_engine`, `alert_sink`
+- Kafka: barramento de eventos e alertas
+- Redis: estado de correlacao distribuido
+- Postgres: alertas, incidentes, auditoria e blacklist simulada
+- Flask API: dashboard, incidentes, relatorios, metricas e auth opcional
+- Nginx static UI: dashboard SOC
+- Prometheus + Grafana: observabilidade operacional
+- nginx-prometheus-exporter: metricas basicas do dashboard web
+- k6: testes de carga
+- Alembic: versionamento formal de schema
+
+## Subindo o ambiente
+
+```powershell
+docker compose up -d --build
+```
+
+URLs locais:
+
+- Dashboard SOC: http://localhost:8080
+- API: http://localhost:5000/health
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (`admin` / `sentinela`, ou variaveis `GRAFANA_ADMIN_*`)
+
+## Observabilidade
+
+Cada worker expoe:
+
+- `/health` em `:8000`
+- `/metrics` em `:8000`
+
+A API expoe:
+
+- `/health`
+- `/metrics`
+- `/metrics/prometheus`
+
+Metricas incluidas:
+
+- throughput Kafka e eventos por minuto
+- logs recebidos/descartados
+- regras executadas e tempo de correlacao
+- alertas persistidos e falhas de escrita
+- incidentes por severidade
+- latencia do pipeline
+- latencia e erros HTTP da API
+- requests e conexoes do dashboard web via Nginx exporter
+- readiness por servico
+- CPU/memoria do processo da API via Prometheus client
+
+## Validando healthchecks
+
+```powershell
+docker compose ps
+Invoke-RestMethod http://localhost:5000/health
+docker compose exec rule_engine python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read().decode())"
+```
+
+Todos os servicos principais devem aparecer como `healthy`: `log_collector`, `simulator`, `rule_engine`, `alert_sink`, `dashboard_api`, `dashboard_web`.
+
+## Testes de carga
+
+Instale k6 localmente e execute:
+
+```powershell
+k6 run tests/load/high_ingestion.js
+k6 run tests/load/multiple_incidents.js
+k6 run tests/load/dashboard_stress.js
+k6 run tests/load/api_endpoints_stress.js
+```
+
+Variaveis uteis:
+
+```powershell
+$env:BASE_URL="http://localhost:5000"
+$env:API_TOKEN="sentinela-demo-token"
+$env:VUS="25"
+$env:DURATION="3m"
+```
+
+## Migracoes
+
+Estrutura Alembic:
+
+- `infra/db/alembic.ini`
+- `infra/db/migrations/env.py`
+- `infra/db/migrations/versions/0001_initial_schema.py`
+
+Execucao local:
+
+```powershell
+py -m pip install -r infra/db/requirements.txt
+alembic -c infra/db/alembic.ini upgrade head
+```
+
+## Documentacao visual
+
+Arquivos:
+
+- `docs/architecture/README.md`
+- `docs/architecture/sentinela-architecture.drawio`
+
+Cobrem arquitetura, fluxo de eventos, fluxo de incidentes, correlacao e dependencias.
+
+## Deploy cloud-ready
+
+Artefatos preparados, sem realizar deploy real:
+
+- Compose de producao: `infra/production/docker-compose.prod.yml`
+- Exemplo de env: `infra/production/.env.example`
+- Kubernetes inicial: `infra/k8s/sentinela-deployment.yaml`
+
+Esses arquivos incluem separacao por env vars, readiness/liveness probes e pontos de persistencia.
+
+## Roadmap recomendado
+
+- Adicionar Kafka exporter dedicado para lag de consumer group com precisao por grupo.
+- Substituir credenciais demo por secrets reais em ambiente produtivo.
+- Executar Alembic como job de release antes da subida da API.
+- Adicionar OpenTelemetry tracing para medir latencia ponta a ponta por `event_id`.
+- Externalizar Postgres/Kafka/Redis para servicos gerenciados em producao.

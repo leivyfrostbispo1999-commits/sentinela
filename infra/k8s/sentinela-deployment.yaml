@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentinela
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sentinela-secrets
+  namespace: sentinela
+type: Opaque
+stringData:
+  DB_PASSWORD: change-me
+  SENTINELA_API_TOKEN: change-me
+  SENTINELA_JWT_SECRET: change-me
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-api
+  namespace: sentinela
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dashboard-api
+  template:
+    metadata:
+      labels:
+        app: dashboard-api
+    spec:
+      containers:
+        - name: dashboard-api
+          image: sentinela/dashboard-api:6.0
+          ports:
+            - containerPort: 5000
+          env:
+            - name: DB_HOST
+              value: postgres
+            - name: DB_NAME
+              value: postgres
+            - name: DB_USER
+              value: postgres
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sentinela-secrets
+                  key: DB_PASSWORD
+            - name: SENTINELA_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sentinela-secrets
+                  key: SENTINELA_API_TOKEN
+            - name: SENTINELA_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: sentinela-secrets
+                  key: SENTINELA_JWT_SECRET
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            periodSeconds: 30
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rule-engine
+  namespace: sentinela
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rule-engine
+  template:
+    metadata:
+      labels:
+        app: rule-engine
+    spec:
+      containers:
+        - name: rule-engine
+          image: sentinela/rule-engine:6.0
+          ports:
+            - containerPort: 8000
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-api
+  namespace: sentinela
+spec:
+  selector:
+    app: dashboard-api
+  ports:
+    - port: 5000
+      targetPort: 5000

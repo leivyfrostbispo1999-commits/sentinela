@@ -5,14 +5,25 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 from kafka import KafkaProducer
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
 EVENT_INTERVAL_SECONDS = float(os.getenv("EVENT_INTERVAL_SECONDS", "1.2"))
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
+METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
+SERVICE_READY = False
+
+LOGS_RECEIVED = Counter("sentinela_log_collector_logs_received_total", "Logs recebidos pelo log_collector")
+LOGS_DISCARDED = Counter("sentinela_log_collector_logs_discarded_total", "Logs descartados pelo log_collector", ["reason"])
+INGESTION_EVENTS = Counter("sentinela_log_collector_ingestion_events_total", "Eventos publicados para o Kafka")
+SERVICE_FAILURES = Counter("sentinela_service_failures_total", "Falhas por serviço", ["service"])
+SERVICE_READY_GAUGE = Gauge("sentinela_service_ready", "Readiness do serviço", ["service"])
 
 IPS = [
     "192.168.1.45",
@@ -48,6 +59,7 @@ def backoff_delay(attempt):
 
 
 def create_producer():
+    global SERVICE_READY
     attempt = 0
     while True:
         try:
@@ -56,8 +68,13 @@ def create_producer():
                 value_serializer=lambda value: json.dumps(value, ensure_ascii=False).encode("utf-8"),
             )
             log_json("INFO", "Kafka conectado", topic=RAW_LOGS_TOPIC)
+            SERVICE_READY = True
+            SERVICE_READY_GAUGE.labels(service="log_collector").set(1)
             return producer
         except Exception as exc:
+            SERVICE_READY = False
+            SERVICE_READY_GAUGE.labels(service="log_collector").set(0)
+            SERVICE_FAILURES.labels(service="log_collector").inc()
             delay = backoff_delay(attempt)
             log_json("WARN", "Aguardando Kafka", error=str(exc), retry_in_seconds=delay)
             time.sleep(delay)
@@ -117,6 +134,7 @@ def build_event():
 
 
 def run():
+    start_ops_server()
     producer = create_producer()
     log_json("INFO", "Gerador de logs iniciado")
 
@@ -124,8 +142,10 @@ def run():
         event = build_event()
 
         try:
+            LOGS_RECEIVED.inc()
             producer.send(RAW_LOGS_TOPIC, event)
             producer.flush(timeout=2)
+            INGESTION_EVENTS.inc()
             log_json(
                 "INFO",
                 "Evento publicado",
@@ -138,8 +158,39 @@ def run():
             )
             time.sleep(EVENT_INTERVAL_SECONDS)
         except Exception as exc:
+            LOGS_DISCARDED.labels(reason="kafka_publish_error").inc()
+            SERVICE_FAILURES.labels(service="log_collector").inc()
             log_json("ERROR", "Falha ao publicar evento", error=str(exc))
             producer = create_producer()
+
+
+class OpsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            status = 200 if SERVICE_READY else 503
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            payload = {"status": "ok"} if SERVICE_READY else {"status": "error", "dependencies": {"kafka": "unavailable"}}
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+        if self.path == "/metrics":
+            data = generate_latest()
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *args):
+        return
+
+
+def start_ops_server():
+    server = ThreadingHTTPServer(("0.0.0.0", METRICS_PORT), OpsHandler)
+    Thread(target=server.serve_forever, daemon=True).start()
 
 
 if __name__ == "__main__":

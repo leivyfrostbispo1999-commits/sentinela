@@ -860,7 +860,7 @@
         const INVESTIGATION_URL = 'http://localhost:5000/investigation/ip';
         const REPORT_URL = 'http://localhost:5000/reports/incident';
         const RULES_URL = 'http://localhost:5000/rules';
-        const METRICS_URL = 'http://localhost:5000/metrics';
+        const METRICS_URL = 'http://localhost:5000/metrics/summary';
         const API_TOKEN = 'sentinela-demo-token';
         const origins = [
             { country: 'Rússia', city: 'Moscow', ip: '45.67.89.12', x: 58, y: 28 },
@@ -1308,11 +1308,35 @@
         }
 
         function exportIncidentReport(incidentId) {
+            const button = el('exportIncidentButton');
+            if (button) {
+                button.disabled = true;
+                button.textContent = 'Gerando Markdown...';
+            }
             window.open(`${REPORT_URL}/${encodeURIComponent(incidentId)}.md`, '_blank', 'noopener');
+            setTimeout(() => {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = 'Markdown gerado';
+                    setTimeout(() => { button.textContent = 'Exportar Markdown'; }, 1400);
+                }
+            }, 500);
         }
 
         function exportIncidentPdf(incidentId) {
+            const button = el('exportIncidentPdfButton');
+            if (button) {
+                button.disabled = true;
+                button.textContent = 'Gerando PDF...';
+            }
             window.open(`${REPORT_URL}/${encodeURIComponent(incidentId)}.pdf`, '_blank', 'noopener');
+            setTimeout(() => {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = 'PDF gerado';
+                    setTimeout(() => { button.textContent = 'Exportar PDF'; }, 1400);
+                }
+            }, 500);
         }
 
         function renderFeed(alerts) {
