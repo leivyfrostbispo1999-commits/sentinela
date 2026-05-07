@@ -1,4 +1,4 @@
-# Arquitetura SENTINELA SOC 6.0
+# Arquitetura SENTINELA 7.0
 
 ## Visao geral
 

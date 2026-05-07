@@ -80,6 +80,7 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-raw_logs}
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
       METRICS_PORT: 8000
     depends_on:
       kafka:
@@ -102,6 +103,7 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-raw_logs}
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
       METRICS_PORT: 8000
     depends_on:
       kafka:
@@ -125,6 +127,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-raw_logs}
       ALERTS_TOPIC: ${ALERTS_TOPIC:-security_alerts}
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
       ENABLE_BLOCK: ${ENABLE_BLOCK:-false}
       CORRELATION_WINDOW_SECONDS: ${CORRELATION_WINDOW_SECONDS:-300}
       ALERT_DEDUP_WINDOW_SECONDS: ${ALERT_DEDUP_WINDOW_SECONDS:-60}
@@ -133,6 +136,12 @@ services:
       RULES_PATH: ${RULES_PATH:-rules.yaml}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       REDIS_STATE_ENABLED: ${REDIS_STATE_ENABLED:-true}
+      DLQ_TOPIC: ${DLQ_TOPIC:-dead_letter_events}
+      PIPELINE_MAX_RETRIES: ${PIPELINE_MAX_RETRIES:-3}
+      PIPELINE_RETRY_BACKOFF_MS: ${PIPELINE_RETRY_BACKOFF_MS:-500}
+      PIPELINE_MAX_BATCH_SIZE: ${PIPELINE_MAX_BATCH_SIZE:-100}
+      PIPELINE_CONSUMER_TIMEOUT_MS: ${PIPELINE_CONSUMER_TIMEOUT_MS:-1000}
+      PIPELINE_POLL_INTERVAL_MS: ${PIPELINE_POLL_INTERVAL_MS:-250}
       METRICS_PORT: 8000
     depends_on:
       kafka:
@@ -157,11 +166,21 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
       ALERTS_TOPIC: ${ALERTS_TOPIC:-security_alerts}
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-postgres}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-root}
+      ENABLE_OPENSEARCH: ${ENABLE_OPENSEARCH:-false}
+      OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
+      OPENSEARCH_INDEX_ALERTS: ${OPENSEARCH_INDEX_ALERTS:-sentinela-alerts}
+      DLQ_TOPIC: ${DLQ_TOPIC:-dead_letter_events}
+      PIPELINE_MAX_RETRIES: ${PIPELINE_MAX_RETRIES:-3}
+      PIPELINE_RETRY_BACKOFF_MS: ${PIPELINE_RETRY_BACKOFF_MS:-500}
+      PIPELINE_MAX_BATCH_SIZE: ${PIPELINE_MAX_BATCH_SIZE:-100}
+      PIPELINE_CONSUMER_TIMEOUT_MS: ${PIPELINE_CONSUMER_TIMEOUT_MS:-1000}
+      PIPELINE_POLL_INTERVAL_MS: ${PIPELINE_POLL_INTERVAL_MS:-250}
       METRICS_PORT: 8000
     depends_on:
       kafka:
@@ -192,15 +211,31 @@ services:
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-root}
       SENTINELA_API_TOKEN: ${SENTINELA_API_TOKEN:-sentinela-demo-token}
+      ENABLE_AUTH: ${ENABLE_AUTH:-false}
       SENTINELA_JWT_SECRET: ${SENTINELA_JWT_SECRET:-sentinela-demo-jwt-secret}
+      SENTINELA_JWT_SECRET_FILE: ${SENTINELA_JWT_SECRET_FILE:-}
       SENTINELA_JWT_TTL_SECONDS: ${SENTINELA_JWT_TTL_SECONDS:-3600}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      REFRESH_TOKEN_EXPIRE_MINUTES: ${REFRESH_TOKEN_EXPIRE_MINUTES:-10080}
+      SENTINELA_ENV: ${SENTINELA_ENV:-development}
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
+      SENTINELA_USERS_JSON: ${SENTINELA_USERS_JSON:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-240}
+      ENABLE_RATE_LIMITING: ${ENABLE_RATE_LIMITING:-false}
+      RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-20}
+      RATE_LIMIT_API_PER_MINUTE: ${RATE_LIMIT_API_PER_MINUTE:-120}
+      ENABLE_TRACING: ${ENABLE_TRACING:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318/v1/traces}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-sentinela-7-api}
+      ENABLE_OPENSEARCH: ${ENABLE_OPENSEARCH:-false}
+      OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
+      OPENSEARCH_INDEX_ALERTS: ${OPENSEARCH_INDEX_ALERTS:-sentinela-alerts}
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/ready', timeout=3).read()\""]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -243,6 +278,54 @@ services:
       - sentinela-net
     mem_limit: 64m
     cpus: "0.10"
+
+  kafka_exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    container_name: sentinela-kafka-exporter
+    restart: unless-stopped
+    command:
+      - "--kafka.server=kafka:9092"
+      - "--web.listen-address=:9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - sentinela-net
+    mem_limit: 128m
+    cpus: "0.15"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: sentinela-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks:
+      - sentinela-net
+    mem_limit: 256m
+    cpus: "0.25"
+
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    profiles: ["search"]
+    container_name: sentinela-opensearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - sentinela-opensearch-data:/usr/share/opensearch/data
+    networks:
+      - sentinela-net
+    mem_limit: 1g
+    cpus: "0.75"
 
   kafka-broker-2:
     image: confluentinc/cp-kafka:7.6.0
@@ -293,6 +376,8 @@ services:
         condition: service_healthy
       simulator:
         condition: service_healthy
+      kafka_exporter:
+        condition: service_started
     networks:
       - sentinela-net
     mem_limit: 256m
@@ -319,6 +404,36 @@ services:
     mem_limit: 384m
     cpus: "0.35"
 
+  reverse_proxy:
+    image: nginx:1.27-alpine
+    profiles: ["production"]
+    container_name: sentinela-reverse-proxy
+    restart: unless-stopped
+    ports:
+      - "${TLS_HTTPS_PORT:-8443}:443"
+      - "${TLS_HTTP_PORT:-8088}:80"
+    environment:
+      ENABLE_TLS: ${ENABLE_TLS:-true}
+    volumes:
+      - ./infra/nginx/sentinela_tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${TLS_CERT_PATH:-./infra/tls/certs/server.crt}:/etc/nginx/certs/server.crt:ro
+      - ${TLS_KEY_PATH:-./infra/tls/certs/server.key}:/etc/nginx/certs/server.key:ro
+    depends_on:
+      dashboard_api:
+        condition: service_healthy
+      dashboard_web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 5s
+    networks:
+      - sentinela-net
+    mem_limit: 128m
+    cpus: "0.15"
+
 networks:
   sentinela-net:
     driver: bridge
@@ -327,3 +442,4 @@ volumes:
   sentinela-db-data:
   sentinela-prometheus-data:
   sentinela-grafana-data:
+  sentinela-opensearch-data:

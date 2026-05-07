@@ -1,4 +1,4 @@
-# Testes de carga SENTINELA SOC 6.0
+# Testes de carga SENTINELA 7.0
 
 Scripts k6 para validar ingestao, stress de API e multiplos incidentes simulados.
 

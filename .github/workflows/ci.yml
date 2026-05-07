@@ -1,43 +1,41 @@
-name: Sentinela CI
+name: sentinela-7-ci
 
 on:
   push:
   pull_request:
 
 jobs:
-  test:
+  test-and-config:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install -r services/rule_engine/requirements.txt
-          python -m pip install -r services/dashboard_api/requirements.txt
-          python -m pip install -r services/log_collector/requirements.txt
-          python -m pip install -r services/simulator/requirements.txt
-          python -m pip install -r services/alert-sink/requirements.txt
+          for f in services/*/requirements.txt; do python -m pip install -r "$f"; done
 
-      - name: Compile Python services
-        run: |
-          python -m py_compile services/log_collector/main.py
-          python -m py_compile services/rule_engine/main.py
-          python -m py_compile services/alert-sink/main.py
-          python -m py_compile services/dashboard_api/main.py
-          python -m py_compile services/simulator/main.py
-
-      - name: Run tests
+      - name: Run unit tests
         env:
-          REDIS_STATE_ENABLED: "false"
-          SENTINELA_API_TOKEN: sentinela-demo-token
-          SENTINELA_JWT_SECRET: ci-jwt-secret
-        run: pytest -q
+          SENTINELA_JWT_SECRET: ci-test-secret
+          ENABLE_AUTH: "true"
+        run: python -m pytest -q
+
+      - name: Compile Python services and scripts
+        run: |
+          python -m py_compile services/dashboard_api/main.py services/alert-sink/main.py services/rule_engine/main.py services/log_collector/main.py services/simulator/main.py
+          python -m py_compile scripts/replay_attack.py scripts/replay_events.py scripts/retention_cleanup.py scripts/generate_password_hash.py
+
+      - name: Validate Docker Compose configs
+        run: |
+          docker compose config
+          docker compose --profile search config
+          docker compose --profile production config
+
+      - name: Validate frontend artifact
+        run: test -f services/dashboard_web/index.html

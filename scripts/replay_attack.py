@@ -106,7 +106,7 @@ def create_producer():
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Replay seguro de eventos simulados do SENTINELA SOC 6.0.")
+    parser = argparse.ArgumentParser(description="Replay seguro de eventos simulados do SENTINELA 7.0.")
     parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="critical_chain")
     parser.add_argument("--delay", type=float, default=0.6, help="Intervalo entre eventos em segundos.")
     return parser.parse_args()
@@ -117,7 +117,7 @@ def main():
     replay_id = os.getenv("REPLAY_ID", f"replay-{args.scenario}-{uuid.uuid4().hex[:8]}")
     sequence = scenario_events(args.scenario, replay_id)
 
-    print(f"SENTINELA SOC 6.0 replay seguro iniciado | scenario={args.scenario} | replay_id={replay_id}")
+    print(f"SENTINELA 7.0 replay seguro iniciado | scenario={args.scenario} | replay_id={replay_id}")
     print(f"Kafka={KAFKA_BOOTSTRAP_SERVERS} | topic={RAW_LOGS_TOPIC}")
     print("Nenhum ataque real, rede externa, firewall ou bloqueio real sera executado.")
 

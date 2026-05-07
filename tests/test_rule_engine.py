@@ -257,3 +257,31 @@ def test_load_rules_fallback_on_bad_yaml(monkeypatch, tmp_path):
     rules = rule_engine.load_rules()
 
     assert any(rule["name"] == "ssh_brute_force" for rule in rules)
+
+
+def test_ioc_enrichment_supports_domain_url_and_hash(monkeypatch):
+    rule_engine = load_rule_engine(monkeypatch)
+
+    domain = rule_engine.check_ioc("malware.example")
+    url = rule_engine.check_ioc("https://phishing.example/login")
+    file_hash = rule_engine.check_ioc("44d88612fea8a8f36de82e1278abb02f")
+
+    assert domain["indicator_type"] == "domain"
+    assert domain["reputation_score"] >= 90
+    assert url["indicator_type"] == "url"
+    assert file_hash["indicator_type"] == "hash"
+
+
+def test_rule_engine_dlq_event_preserves_tenant_and_correlation(monkeypatch):
+    rule_engine = load_rule_engine(monkeypatch)
+    event = {"event_id": "evt-1", "tenant_id": "tenant-a", "correlation_id": "cid-1"}
+
+    dlq = rule_engine.build_dlq_event(event, RuntimeError("boom"), retry_count=3)
+
+    assert dlq["original_event"] == event
+    assert dlq["failed_service"] == "rule_engine"
+    assert dlq["retry_count"] == 3
+    assert dlq["tenant_id"] == "tenant-a"
+    assert dlq["correlation_id"] == "cid-1"
+    assert dlq["source_topic"] == rule_engine.RAW_LOGS_TOPIC
+    assert dlq["target_topic"] == rule_engine.ALERTS_TOPIC

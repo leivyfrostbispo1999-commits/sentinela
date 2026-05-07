@@ -1,20 +1,20 @@
 # Histórico de Decisões Técnicas
 
-## SENTINELA SOC 4.0
+## SENTINELA 7.0
 
 - Dashboard SOC visual em HTML, CSS e JavaScript puro.
 - Mapa global simulado sem dependência de APIs externas.
 - Threat Intelligence local para demonstrar enriquecimento de alertas.
 - `simulated_block` como mecanismo seguro de resposta sem bloqueio real.
 
-## SENTINELA SOC 5.0
+## SENTINELA 7.0
 
 - Regras YAML para separar lógica de detecção da implementação Python.
 - Filtros temporais na API para análise de histórico recente.
 - Métricas Prometheus para demonstrar observabilidade operacional.
 - Threat Intelligence externa simulada com cache para evitar dependência de chave real.
 
-## SENTINELA SOC 5.5
+## SENTINELA 7.0
 
 - Repositório organizado para portfólio.
 - Documentação de escalabilidade Kafka, observabilidade e defesa técnica.
@@ -33,7 +33,7 @@
 - Endpoint `POST /demo/simulate-attack` protegido por autenticação e limitado a alertas simulados.
 - Timeline investigativa vertical adicionada para demonstrar progressão de detecção, correlação e resposta SOC.
 
-## SENTINELA SOC 6.0
+## SENTINELA 7.0
 
 - Incidentes passaram a ser entidade persistida em `incidents`, com relacionamento em `incident_alerts` e trilha manual em `incident_audit_log`.
 - A correlação multi-IP/multi-entidade considera `source_ip`, destino, usuário, serviço/porta, MITRE, `replay_id` e janela temporal de 10 minutos.

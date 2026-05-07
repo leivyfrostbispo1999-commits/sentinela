@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SENTINELA SOC 6.0</title>
+    <title>SENTINELA 7.0</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -64,27 +64,94 @@
             justify-content: flex-end;
             align-items: center;
         }
+        .toolbar .select { flex: 1 1 160px; min-width: 150px; }
 
         .select, .button {
             min-height: 38px;
             border: 1px solid rgba(101, 231, 255, 0.35);
             border-radius: 7px;
-            background: rgba(101, 231, 255, 0.08);
+            background: #07111f;
             color: var(--text);
             font-weight: 800;
         }
 
-        .select { padding: 0 10px; }
+        .select {
+            width: auto;
+            max-width: 100%;
+            padding: 0 34px 0 10px;
+            color-scheme: dark;
+            accent-color: var(--cyan);
+            appearance: auto;
+            box-shadow: inset 0 0 0 1px rgba(101, 231, 255, 0.04), 0 0 18px rgba(101, 231, 255, 0.04);
+        }
+        .select:hover,
+        .select:focus-visible,
+        .search:hover,
+        .search:focus-visible,
+        .login-input:hover,
+        .login-input:focus-visible,
+        .incident-form input:hover,
+        .incident-form input:focus-visible,
+        .incident-form textarea:hover,
+        .incident-form textarea:focus-visible {
+            border-color: rgba(101, 231, 255, 0.72);
+            outline: 2px solid rgba(101, 231, 255, 0.28);
+            outline-offset: 2px;
+            background: #0b1726;
+        }
+        .select option,
+        .select optgroup {
+            background-color: #07111f;
+            color: #e7f1ff;
+            font-weight: 800;
+        }
+        .select option:checked {
+            background-color: #0f1f33;
+            color: #65e7ff;
+        }
+        .select option:hover {
+            background-color: #0b1726;
+            color: #ffffff;
+        }
+        .select:disabled,
+        .search:disabled,
+        .login-input:disabled {
+            opacity: 0.62;
+            cursor: not-allowed;
+        }
         .search {
             width: min(360px, 100%);
             min-height: 38px;
             border: 1px solid rgba(101, 231, 255, 0.35);
             border-radius: 7px;
-            background: rgba(101, 231, 255, 0.08);
+            background: #07111f;
             color: var(--text);
             padding: 0 12px;
             font-weight: 700;
         }
+        .search::placeholder,
+        .login-input::placeholder,
+        .incident-form input::placeholder,
+        .incident-form textarea::placeholder {
+            color: #7faac1;
+            opacity: 1;
+        }
+        ::selection {
+            background: rgba(101, 231, 255, 0.26);
+            color: #ffffff;
+        }
+        * {
+            scrollbar-color: rgba(101, 231, 255, 0.48) #07111f;
+            scrollbar-width: thin;
+        }
+        *::-webkit-scrollbar { width: 10px; height: 10px; }
+        *::-webkit-scrollbar-track { background: #07111f; }
+        *::-webkit-scrollbar-thumb {
+            background: rgba(101, 231, 255, 0.42);
+            border: 2px solid #07111f;
+            border-radius: 999px;
+        }
+        *::-webkit-scrollbar-thumb:hover { background: rgba(101, 231, 255, 0.68); }
         .button { padding: 0 14px; cursor: pointer; color: var(--cyan); }
         .mode-toggle {
             display: inline-grid;
@@ -117,6 +184,34 @@
             cursor: wait;
             opacity: 0.72;
         }
+        .login-bar {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(110px, 1fr)) auto;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .login-input {
+            min-height: 36px;
+            min-width: 0;
+            border: 1px solid rgba(101, 231, 255, 0.28);
+            border-radius: 7px;
+            background: #07111f;
+            color: var(--text);
+            padding: 0 10px;
+            font-weight: 700;
+        }
+        .session-line {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 8px;
+            color: var(--muted);
+            font-family: Consolas, monospace;
+            font-size: 0.74rem;
+        }
+        .session-line strong { color: var(--cyan); }
+        .session-line .offline { color: var(--orange); }
+        .session-line .online { color: var(--green); }
 
         .header-status { min-width: 260px; text-align: right; }
         .level { font-family: Consolas, monospace; font-size: 1.55rem; font-weight: 900; }
@@ -585,7 +680,7 @@
             min-height: 38px;
             border: 1px solid rgba(101, 231, 255, 0.24);
             border-radius: 6px;
-            background: rgba(5, 8, 15, 0.7);
+            background: #07111f;
             color: var(--text);
             padding: 9px;
             font: inherit;
@@ -624,6 +719,8 @@
         @media (max-width: 680px) {
             .shell { width: min(100% - 20px, 1600px); }
             .cards { grid-template-columns: 1fr; }
+            .toolbar .select, .toolbar .search, .toolbar .button { width: 100%; flex-basis: 100%; }
+            .login-bar { grid-template-columns: 1fr; }
             th, td { padding: 10px 8px; font-size: 0.78rem; }
             .map-stage { height: 380px; }
             .incident-overview { grid-template-columns: 1fr; }
@@ -639,11 +736,16 @@
     <main class="shell">
         <header>
             <section>
-                <h1>SENTINELA SOC 6.0</h1>
+                <h1>SENTINELA 7.0</h1>
                 <p class="subtitle">Plataforma SOC local com incidentes persistidos, correlação multi-IP, MITRE ATT&CK, investigação por entidade e relatórios exportáveis.</p>
                 <p class="notice">Ambiente local de demonstração. Nenhuma ação real de ataque ou bloqueio é executada.</p>
             </section>
             <aside class="header-status">
+                <form class="login-bar" id="loginForm">
+                    <input class="login-input" id="usernameInput" autocomplete="username" value="admin" aria-label="Usuário">
+                    <input class="login-input" id="passwordInput" type="password" autocomplete="current-password" value="sentinela" aria-label="Senha">
+                    <button class="button" id="loginButton" type="submit">Login</button>
+                </form>
                 <div class="toolbar">
                     <select class="select" id="rangeSelect" aria-label="Filtro de tempo">
                         <option value="5m">Últimos 5 min</option>
@@ -680,6 +782,10 @@
                 <div class="muted">Nível de Ameaça</div>
                 <div class="level low" id="threatLevel">LOW</div>
                 <div class="muted" id="lastUpdate">Aguardando telemetria</div>
+                <div class="session-line">
+                    <span id="sessionInfo">sessão local</span>
+                    <strong id="wsStatus" class="offline">WS offline</strong>
+                </div>
             </aside>
         </header>
 
@@ -735,7 +841,6 @@
                     <option value="all">Todos os status</option>
                     <option value="NEW">NEW</option>
                     <option value="INVESTIGATING">INVESTIGATING</option>
-                    <option value="CONTAINED">CONTAINED</option>
                     <option value="CONTAINED">CONTAINED</option>
                     <option value="RESOLVED">RESOLVED</option>
                     <option value="FALSE_POSITIVE">FALSE_POSITIVE</option>
@@ -861,7 +966,9 @@
         const REPORT_URL = 'http://localhost:5000/reports/incident';
         const RULES_URL = 'http://localhost:5000/rules';
         const METRICS_URL = 'http://localhost:5000/metrics/summary';
-        const API_TOKEN = 'sentinela-demo-token';
+        const AUTH_URL = 'http://localhost:5000/auth/token';
+        const WS_URL = 'ws://localhost:5000/ws/alerts';
+        const LEGACY_API_TOKEN = 'sentinela-demo-token';
         const origins = [
             { country: 'Rússia', city: 'Moscow', ip: '45.67.89.12', x: 58, y: 28 },
             { country: 'China', city: 'Beijing', ip: '185.220.101.44', x: 76, y: 39 },
@@ -882,11 +989,13 @@
         let incidentTimeline = [];
         let demoOnlyMode = false;
         let dashboardMode = 'demo';
+        let session = JSON.parse(localStorage.getItem('sentinelaSession') || 'null');
+        let wsClient;
 
         const el = id => document.getElementById(id);
         const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
         const risk = alert => Number.parseInt(alert.score_breakdown?.final_score ?? alert.score_final ?? alert.risco ?? alert.threat_score, 10) || 0;
-        const authHeaders = { 'X-SENTINELA-TOKEN': API_TOKEN };
+        const authHeaders = () => session?.token ? { 'Authorization': `Bearer ${session.token}` } : { 'X-SENTINELA-TOKEN': LEGACY_API_TOKEN };
 
         function getSeverity(riskValue) {
             if (riskValue >= 90) return 'critical';
@@ -1179,7 +1288,7 @@
 
         async function refreshIncidents() {
             try {
-                const response = await fetch(INCIDENTS_URL, { cache: 'no-store', headers: authHeaders });
+                const response = await fetch(INCIDENTS_URL, { cache: 'no-store', headers: authHeaders() });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const payload = await response.json();
                 const incidents = payload.data || [];
@@ -1236,7 +1345,7 @@
             el('drawerBackdrop').classList.add('open');
             el('detailDrawer').classList.add('open');
             try {
-                const response = await fetch(`${INCIDENTS_URL}/${encodeURIComponent(incidentId)}`, { cache: 'no-store', headers: authHeaders });
+                const response = await fetch(`${INCIDENTS_URL}/${encodeURIComponent(incidentId)}`, { cache: 'no-store', headers: authHeaders() });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const incident = await response.json();
                 renderIncidentDetail(incident);
@@ -1298,7 +1407,7 @@
             const response = await fetch(`${INCIDENTS_URL}/${encodeURIComponent(incidentId)}`, {
                 method: 'PATCH',
                 cache: 'no-store',
-                headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                headers: { ...authHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1384,13 +1493,14 @@
                 return `
                     <tr class="${rowClass}" data-alert-id="${esc(alert.id)}">
                         <td class="mono" style="border-left:4px solid ${color}; color:${color}">${esc(alert.ts ? new Date(alert.ts).toLocaleString('pt-BR') : 'N/D')}</td>
-                        <td class="mono"><button class="button ip-link" data-source-ip="${esc(alert.source_ip || alert.ip)}" type="button">${esc(alert.source_ip || alert.ip)}</button><br><span class="muted">-> ${esc(target)}<br>${esc(asset)}</span></td>
+                        <td class="mono"><button class="button ip-link" data-source-ip="${esc(alert.source_ip || alert.ip)}" type="button">${esc(alert.source_ip || alert.ip)}</button><br><span class="muted">-> ${esc(target)}<br>${esc(asset)}<br>tenant ${esc(alert.tenant_id || 'default')}</span></td>
                         <td><span class="tag ${sev}" style="color:${color}; border-color:${color}; ${glow}">${esc(String(alert.severity || sev).toUpperCase())}</span><br><span class="muted">${esc(alert.alert_type || 'alert')}</span></td>
                         <td class="mono" style="color:${color}">${risk(alert)}</td>
                         <td class="mono">
                             <div class="tag ${historyMode ? sev : consolidationClass}">${esc(historyMode ? String(alert.severity || sev).toUpperCase() : (occurrenceCount > 1 ? 'Incidente correlacionado' : 'Evento individual'))}</div>
                             <div class="muted">${esc(firstSeen)} -> ${esc(lastSeen)}</div>
                             <div class="muted">${esc(historyMode ? (alert.correlation_key || 'N/D') : eventTypes)}</div>
+                            <div class="muted">corr ${esc(alert.correlation_id || alert.event_id || 'N/D')}</div>
                         </td>
                         <td class="mono">MITRE: ${esc(mitre)}<br><span class="muted">${esc(rule)}<br>${esc(alert.correlation_rule || alert.correlation_key || 'N/D')}</span></td>
                         <td>${ti}</td>
@@ -1523,7 +1633,7 @@
                 const response = await fetch(DEMO_URL, {
                     method: 'POST',
                     cache: 'no-store',
-                    headers: authHeaders
+                    headers: authHeaders()
                 });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const payload = await response.json();
@@ -1557,7 +1667,7 @@
             const selectedRange = el('rangeSelect').value;
             try {
                 const demoQuery = dashboardMode === 'demo' ? '&mode=demo' : '';
-                const response = await fetch(`${API_URL}?range=${encodeURIComponent(selectedRange)}${demoQuery}`, { cache: 'no-store', headers: authHeaders });
+                const response = await fetch(`${API_URL}?range=${encodeURIComponent(selectedRange)}${demoQuery}`, { cache: 'no-store', headers: authHeaders() });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const payload = await response.json();
                 const alerts = Array.isArray(payload) ? payload : (payload.data || []);
@@ -1579,6 +1689,8 @@
         function openDrawer(alert) {
             const fields = [
                 ['IP', alert.source_ip || alert.ip],
+                ['Tenant', alert.tenant_id || 'default'],
+                ['Correlation ID', alert.correlation_id || alert.event_id || 'N/D'],
                 ['Alvo', `${alert.target_host || 'N/D'} / ${alert.target_ip || 'N/D'}`],
                 ['Serviço alvo', `${alert.target_service || alert.service || 'N/D'}:${alert.target_port || alert.port || 'N/D'}`],
                 ['Usuário alvo', alert.target_user || 'N/D'],
@@ -1630,7 +1742,7 @@
             el('drawerBackdrop').classList.add('open');
             el('detailDrawer').classList.add('open');
             try {
-                const response = await fetch(`${INVESTIGATION_URL}/${encodeURIComponent(sourceIp)}`, { cache: 'no-store', headers: authHeaders });
+                const response = await fetch(`${INVESTIGATION_URL}/${encodeURIComponent(sourceIp)}`, { cache: 'no-store', headers: authHeaders() });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 const mitres = (data.mitre_techniques || []).map(item => `${item.id} - ${item.name} (${item.tactic})`).join(', ') || 'N/D';
@@ -1674,6 +1786,66 @@
             el('detailDrawer').classList.remove('open');
         }
 
+        function renderSession() {
+            const user = session?.user || {};
+            el('sessionInfo').textContent = user.sub ? `${user.sub} | ${user.role || 'viewer'} | tenant ${user.tenant_id || 'default'}` : 'token legado | admin | tenant default';
+        }
+
+        async function login(event) {
+            event.preventDefault();
+            el('loginButton').disabled = true;
+            try {
+                const response = await fetch(AUTH_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: el('usernameInput').value, password: el('passwordInput').value })
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                session = await response.json();
+                localStorage.setItem('sentinelaSession', JSON.stringify(session));
+                renderSession();
+                connectWebSocket();
+                refresh();
+            } catch (error) {
+                el('sessionInfo').textContent = 'falha no login';
+            } finally {
+                el('loginButton').disabled = false;
+            }
+        }
+
+        function connectWebSocket() {
+            if (!('WebSocket' in window)) return;
+            if (wsClient) wsClient.close();
+            const token = session?.token;
+            const url = token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL;
+            wsClient = new WebSocket(url);
+            wsClient.onopen = () => {
+                el('wsStatus').textContent = 'WS online';
+                el('wsStatus').className = 'online';
+            };
+            wsClient.onclose = () => {
+                el('wsStatus').textContent = 'WS offline';
+                el('wsStatus').className = 'offline';
+                setTimeout(connectWebSocket, 3500);
+            };
+            wsClient.onerror = () => {
+                el('wsStatus').textContent = 'WS erro';
+                el('wsStatus').className = 'offline';
+            };
+            wsClient.onmessage = event => {
+                const payload = JSON.parse(event.data || '{}');
+                if (payload.type !== 'alert' || !payload.data) return;
+                const alert = payload.data;
+                if (alert.id && seenIds.has(alert.id)) return;
+                allAlerts = [alert, ...allAlerts].slice(0, 300);
+                if (alert.id) seenIds.add(alert.id);
+                animateAttack(alert);
+                renderAll(allAlerts);
+                el('lastUpdate').textContent = `Realtime às ${new Date().toLocaleTimeString('pt-BR')}`;
+            };
+        }
+
+        el('loginForm').addEventListener('submit', login);
         el('refreshButton').addEventListener('click', refresh);
         el('simulateAttackButton').addEventListener('click', simulateAttack);
         el('demoModeButton').addEventListener('click', () => setDashboardMode('demo'));
@@ -1727,6 +1899,8 @@
         el('drawerBackdrop').addEventListener('click', closeDrawer);
 
         renderStaticPoints([]);
+        renderSession();
+        connectWebSocket();
         refresh();
         refreshIncidents();
         setInterval(refresh, 2500);

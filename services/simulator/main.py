@@ -14,6 +14,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_late
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
 SERVICE_READY = False
@@ -109,6 +110,8 @@ def create_producer():
 def build_event(ip, event_type, port, scenario="generic", **extra):
     return {
         "event_id": str(uuid.uuid4()),
+        "tenant_id": extra.get("tenant_id", DEFAULT_TENANT_ID),
+        "correlation_id": extra.get("correlation_id", str(uuid.uuid4())),
         "ip": ip,
         "source_ip": ip,
         "event_type": event_type,

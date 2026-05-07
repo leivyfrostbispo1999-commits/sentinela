@@ -1,4 +1,4 @@
-# SENTINELA Executive Report
+# SENTINELA 7.0 Executive Report
 
 ## Overview
 

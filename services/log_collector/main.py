@@ -14,6 +14,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_late
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
 EVENT_INTERVAL_SECONDS = float(os.getenv("EVENT_INTERVAL_SECONDS", "1.2"))
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
@@ -86,6 +87,8 @@ def build_event():
     event_choice = random.random()
     base_event = {
         "event_id": str(uuid.uuid4()),
+        "tenant_id": DEFAULT_TENANT_ID,
+        "correlation_id": str(uuid.uuid4()),
         "ts": now_iso(),
         "timestamp": time.time(),
         "ip": ip,

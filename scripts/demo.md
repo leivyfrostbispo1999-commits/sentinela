@@ -1,4 +1,4 @@
-# SENTINELA Demo Script
+# SENTINELA 7.0 Demo Script
 
 ## 1. Start the Environment
 

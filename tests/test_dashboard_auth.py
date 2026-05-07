@@ -1,4 +1,6 @@
 import importlib.util
+import base64
+import hashlib
 import sys
 import types
 import uuid
@@ -12,6 +14,12 @@ sys.path.insert(0, str(API_PATH))
 
 if "psycopg2" not in sys.modules:
     sys.modules["psycopg2"] = types.SimpleNamespace(connect=lambda **_: None)
+
+
+def api_hash_for_test(password, salt_b64, iterations):
+    salt = salt_b64
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 def load_api(monkeypatch):
@@ -82,9 +90,11 @@ def test_legacy_token_is_accepted(monkeypatch):
 
 def test_jwt_is_created_and_accepted(monkeypatch):
     api = load_api(monkeypatch)
-    token = api.create_jwt(subject="pytest", ttl_seconds=60)
+    token = api.create_jwt(subject="pytest", ttl_seconds=60, role="analyst", tenant_id="tenant-a")
 
     assert api.verify_jwt(token) is True
+    assert api.decode_jwt(token)["role"] == "analyst"
+    assert api.decode_jwt(token)["tenant_id"] == "tenant-a"
     with api.app.test_request_context(headers={"Authorization": f"Bearer {token}"}):
         assert api.token_is_valid() is True
 
@@ -93,6 +103,226 @@ def test_invalid_jwt_is_rejected(monkeypatch):
     api = load_api(monkeypatch)
 
     assert api.verify_jwt("invalid.jwt.token") is False
+
+
+def test_expired_jwt_is_rejected(monkeypatch):
+    api = load_api(monkeypatch)
+    token = api.create_jwt(subject="pytest", ttl_seconds=-1)
+
+    assert api.verify_jwt(token) is False
+
+
+def test_refresh_token_valid_returns_new_access_token(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    client = api.app.test_client()
+    refresh = api.create_jwt(subject="analyst", ttl_seconds=60, role="analyst", tenant_id="tenant-a", token_use="refresh")
+
+    response = client.post("/auth/refresh", json={"refresh_token": refresh})
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["access_token"]
+    assert payload["refresh_token"]
+    assert payload["token"] == payload["access_token"]
+    assert api.decode_jwt(payload["access_token"])["token_use"] == "access"
+
+
+def test_refresh_rejects_invalid_expired_and_access_token(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    client = api.app.test_client()
+    access = api.create_jwt(subject="analyst", ttl_seconds=60, role="analyst", tenant_id="tenant-a", token_use="access")
+    expired_refresh = api.create_jwt(subject="analyst", ttl_seconds=-1, role="analyst", tenant_id="tenant-a", token_use="refresh")
+
+    assert client.post("/auth/refresh", json={"refresh_token": "bad"}).status_code == 401
+    assert client.post("/auth/refresh", json={"refresh_token": expired_refresh}).status_code == 401
+    assert client.post("/auth/refresh", json={"refresh_token": access}).status_code == 401
+
+
+def test_login_returns_role_and_tenant_claims(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    client = api.app.test_client()
+
+    response = client.post("/auth/token", json={"username": "analyst", "password": "analyst"})
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["user"]["role"] == "analyst"
+    assert payload["user"]["tenant_id"] == "default"
+    assert api.decode_jwt(payload["token"])["role"] == "analyst"
+    assert payload["access_token"] == payload["token"]
+    assert payload["refresh_token"]
+
+
+def test_viewer_cannot_update_incident(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    token = api.create_jwt(subject="viewer", role="viewer", tenant_id="default")
+    client = api.app.test_client()
+
+    response = client.patch("/incidents/INC-1", json={"status": "investigating"}, headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 403
+
+
+def test_fetch_alert_rows_filters_by_tenant(monkeypatch):
+    api = load_api(monkeypatch)
+    fake_conn = FakeConnection()
+
+    with api.app.test_request_context(headers={"X-Tenant-ID": "tenant-a"}):
+        api.fetch_alert_rows(fake_conn, limit=10)
+
+    statement, params = fake_conn.cursor_obj.statements[-1]
+    assert "tenant_id = %s" in statement
+    assert params[0] == "tenant-a"
+
+
+def test_metrics_endpoint_returns_prometheus_payload(monkeypatch):
+    api = load_api(monkeypatch)
+    fake_conn = FakeConnection()
+    monkeypatch.setattr(api, "get_connection", lambda: fake_conn)
+    client = api.app.test_client()
+
+    response = client.get("/metrics", headers={"X-SENTINELA-TOKEN": "sentinela-demo-token"})
+
+    assert response.status_code == 200
+    assert "sentinela_dashboard_http_requests_total" in response.get_data(as_text=True)
+
+
+def test_ready_endpoint_checks_database(monkeypatch):
+    api = load_api(monkeypatch)
+    fake_conn = FakeConnection()
+    monkeypatch.setattr(api, "get_connection", lambda: fake_conn)
+    client = api.app.test_client()
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.get_json()["dependencies"]["postgres"] == "ok"
+
+
+def test_search_requires_authorization_when_auth_enabled(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    client = api.app.test_client()
+
+    response = client.get("/search?q=BRUTE_FORCE")
+
+    assert response.status_code == 401
+
+
+def test_rate_limiting_blocks_sensitive_endpoint_when_enabled(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "true")
+    monkeypatch.setenv("RATE_LIMIT_AUTH_PER_MINUTE", "1")
+    api = load_api(monkeypatch)
+    client = api.app.test_client()
+
+    first = client.post("/auth/token", json={"username": "analyst", "password": "wrong"})
+    second = client.post("/auth/token", json={"username": "analyst", "password": "wrong"})
+
+    assert first.status_code == 401
+    assert second.status_code == 429
+
+
+def test_search_falls_back_to_postgres_when_opensearch_unavailable(monkeypatch):
+    api = load_api(monkeypatch)
+    fake_conn = FakeConnection()
+    monkeypatch.setattr(api, "get_connection", lambda: fake_conn)
+    monkeypatch.setattr(api, "search_opensearch", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline")))
+    client = api.app.test_client()
+
+    response = client.get("/search?q=BRUTE_FORCE", headers={"X-Tenant-ID": "tenant-b", "X-SENTINELA-TOKEN": "sentinela-demo-token"})
+
+    assert response.status_code == 200
+    assert response.get_json()["backend"] == "postgres"
+    statement, params = fake_conn.cursor_obj.statements[-1]
+    assert "tenant_id = %s" in statement
+    assert params[0] == "tenant-b"
+
+
+def test_pbkdf2_auth_with_users_json_object(monkeypatch):
+    password_hash = "pbkdf2_sha256$1$dGVzdHNhbHQ$" + api_hash_for_test("secret", "dGVzdHNhbHQ", 1)
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    monkeypatch.setenv("SENTINELA_USERS_JSON", f'{{"soc-admin":{{"password_hash":"{password_hash}","role":"admin","tenant_id":"tenant-sec"}}}}')
+    api = load_api(monkeypatch)
+    client = api.app.test_client()
+
+    response = client.post("/auth/token", json={"username": "soc-admin", "password": "secret"})
+
+    assert response.status_code == 200
+    assert response.get_json()["user"]["tenant_id"] == "tenant-sec"
+
+
+def test_production_rejects_default_jwt_secret(monkeypatch):
+    monkeypatch.setenv("SENTINELA_ENV", "production")
+    monkeypatch.setenv("SENTINELA_JWT_SECRET", "sentinela-demo-jwt-secret")
+    module_name = f"sentinela_dashboard_api_main_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, API_PATH / "main.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+
+    try:
+        spec.loader.exec_module(module)
+        raised = False
+    except RuntimeError as exc:
+        raised = "SENTINELA_JWT_SECRET" in str(exc)
+
+    assert raised is True
+
+
+def test_tracing_disabled_does_not_require_otel(monkeypatch):
+    monkeypatch.setenv("ENABLE_TRACING", "false")
+    api = load_api(monkeypatch)
+
+    assert api.ENABLE_TRACING is False
+    assert api.TRACER is None
+
+
+class AuditCursor(FakeCursor):
+    description = [
+        ("id",), ("timestamp",), ("tenant_id",), ("actor_user",), ("actor_role",), ("action",),
+        ("resource_type",), ("resource_id",), ("correlation_id",), ("source_ip",), ("success",), ("metadata_json",)
+    ]
+
+    def fetchall(self):
+        return [(1, datetime.now(timezone.utc), "tenant-a", "admin", "admin", "login_success", "auth", "admin", "cid", "127.0.0.1", True, {})]
+
+
+class AuditConnection(FakeConnection):
+    def __init__(self):
+        super().__init__()
+        self.cursor_obj = AuditCursor()
+
+
+def test_audit_admin_access_and_tenant_filter(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    token = api.create_jwt(subject="admin", role="admin", tenant_id="tenant-a")
+    fake_conn = AuditConnection()
+    monkeypatch.setattr(api, "get_connection", lambda: fake_conn)
+    client = api.app.test_client()
+
+    response = client.get("/audit?action=login_success", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    assert response.get_json()["count"] == 1
+    statement, params = fake_conn.cursor_obj.statements[-1]
+    assert "tenant_id = %s" in statement
+    assert params[0] == "tenant-a"
+
+
+def test_audit_viewer_is_forbidden(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    token = api.create_jwt(subject="viewer", role="viewer", tenant_id="tenant-a")
+    client = api.app.test_client()
+
+    response = client.get("/audit", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 403
 
 
 def test_demo_simulation_requires_authentication(monkeypatch):
@@ -329,6 +559,6 @@ def test_report_generation_contains_60_sections(monkeypatch):
     body = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert "SENTINELA SOC 6.0" in body
+    assert "SENTINELA 7.0" in body
     assert "Notas do Analista" in body
     assert "Recomendações Defensivas" in body

@@ -10,21 +10,46 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import Request as UrlRequest, urlopen
 
 import psycopg2
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, has_request_context, request
 from flask_cors import CORS
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, PlatformCollector, ProcessCollector, generate_latest
+from sentinela_secrets import resolve_secret
+
+try:
+    from flask_sock import Sock
+except ImportError:
+    Sock = None
 
 try:
     import yaml
 except ImportError:
     yaml = None
 
+try:
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+except ImportError:
+    trace = None
+    OTLPSpanExporter = None
+    FlaskInstrumentor = None
+    Resource = None
+    TracerProvider = None
+    BatchSpanProcessor = None
+
 
 app = Flask(__name__)
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+SENTINELA_ENV = os.getenv("SENTINELA_ENV", "development").strip().lower()
+CORS_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", os.getenv("CORS_ORIGINS", "*"))
 CORS(app, resources={r"/*": {"origins": CORS_ORIGINS.split(",") if CORS_ORIGINS != "*" else "*"}})
+sock = Sock(app) if Sock else None
 SCHEMA_INITIALIZED = False
 
 DB_CONFIG = {
@@ -36,13 +61,24 @@ DB_CONFIG = {
 }
 
 API_TOKEN = os.getenv("SENTINELA_API_TOKEN", "sentinela-demo-token")
-JWT_SECRET = os.getenv("SENTINELA_JWT_SECRET", "sentinela-demo-jwt-secret")
-JWT_TTL_SECONDS = int(os.getenv("SENTINELA_JWT_TTL_SECONDS", "3600"))
+JWT_SECRET = resolve_secret("SENTINELA_JWT_SECRET", default="sentinela-demo-jwt-secret", required=SENTINELA_ENV == "production")
+JWT_TTL_SECONDS = int(os.getenv("SENTINELA_JWT_TTL_SECONDS", str(int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")) * 60)))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(max(1, JWT_TTL_SECONDS // 60))))
+REFRESH_TOKEN_EXPIRE_MINUTES = int(os.getenv("REFRESH_TOKEN_EXPIRE_MINUTES", "10080"))
 ENABLE_AUTH = os.getenv("ENABLE_AUTH", "false").lower() == "true"
+ENABLE_TRACING = os.getenv("ENABLE_TRACING", "false").lower() == "true"
+ENABLE_OPENSEARCH = os.getenv("ENABLE_OPENSEARCH", "false").lower() == "true"
+OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://opensearch:9200").rstrip("/")
+OPENSEARCH_INDEX_ALERTS = os.getenv("OPENSEARCH_INDEX_ALERTS", "sentinela-alerts")
 SENTINELA_USER = os.getenv("SENTINELA_USER", "admin")
 SENTINELA_PASSWORD = os.getenv("SENTINELA_PASSWORD", "sentinela")
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
+VALID_ROLES = {"admin", "analyst", "viewer"}
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "10"))
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "240"))
+ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
+RATE_LIMIT_AUTH_PER_MINUTE = int(os.getenv("RATE_LIMIT_AUTH_PER_MINUTE", "20"))
+RATE_LIMIT_API_PER_MINUTE = int(os.getenv("RATE_LIMIT_API_PER_MINUTE", "120"))
 RULES_CANDIDATES = [
     Path(os.getenv("RULES_PATH", "sentinela_rules.yml")),
     Path("config/sentinela_rules.yml"),
@@ -50,7 +86,7 @@ RULES_CANDIDATES = [
     Path("../rule_engine/sentinela_rules.yml"),
     Path("../rule_engine/rules.yaml"),
 ]
-SENTINELA_VERSION = "SENTINELA SOC 6.0"
+SENTINELA_VERSION = "SENTINELA 7.0"
 INCIDENT_WINDOW_SECONDS = int(os.getenv("INCIDENT_WINDOW_SECONDS", "600"))
 ALLOWED_INCIDENT_STATUSES = {"NEW", "DETECTED", "TRIAGED", "INVESTIGATING", "CONTAINED", "RESOLVED", "FALSE_POSITIVE", "CLOSED"}
 OPEN_INCIDENT_STATUSES = {"NEW", "DETECTED", "TRIAGED", "INVESTIGATING", "CONTAINED"}
@@ -92,12 +128,123 @@ REQUEST_LATENCY = Histogram(
     registry=REGISTRY,
 )
 HTTP_ERRORS = Counter("sentinela_dashboard_http_errors_total", "Erros HTTP por classe", ["status_class"], registry=REGISTRY)
+RATE_LIMITED_REQUESTS = Counter("sentinela_rate_limited_requests_total", "Requests bloqueados por rate limiting", ["endpoint"], registry=REGISTRY)
+DLQ_EVENTS_TOTAL = Counter("sentinela_dlq_events_total", "Eventos enviados para DLQ por servico", ["service"], registry=REGISTRY)
 DEMO_COUNTER = Counter("sentinela_demo_incidents_total", "Total de incidentes demo executados", registry=REGISTRY)
 ALERTS_GAUGE = Gauge("sentinela_alerts_stored_total", "Total de alertas persistidos", registry=REGISTRY)
 INCIDENTS_GAUGE = Gauge("sentinela_incidents_stored_total", "Total de incidentes persistidos", registry=REGISTRY)
 INCIDENTS_SEVERITY_GAUGE = Gauge("sentinela_incidents_by_severity", "Incidentes persistidos por severidade", ["severity"], registry=REGISTRY)
 EVENTS_PER_MINUTE_GAUGE = Gauge("sentinela_events_processed_per_minute", "Eventos processados por minuto", registry=REGISTRY)
+WEBSOCKET_CONNECTIONS = Gauge("sentinela_websocket_connections", "Conexoes WebSocket ativas", registry=REGISTRY)
+PROCESSED_EVENTS_BY_TENANT = Gauge("sentinela_processed_events_by_tenant", "Eventos processados por tenant nas ultimas 24h", ["tenant_id"], registry=REGISTRY)
 RATE_LIMIT_BUCKETS = defaultdict(deque)
+RATE_LIMIT_ENDPOINTS = {
+    ("POST", "/auth/token"): "auth",
+    ("POST", "/auth/refresh"): "auth",
+    ("POST", "/demo/simulate-attack"): "api",
+    ("POST", "/demo"): "api",
+    ("GET", "/search"): "api",
+    ("GET", "/audit"): "api",
+}
+
+
+def setup_tracing():
+    if not ENABLE_TRACING:
+        return None
+    if not all([trace, OTLPSpanExporter, FlaskInstrumentor, Resource, TracerProvider, BatchSpanProcessor]):
+        print(json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "level": "WARN", "component": "dashboard_api", "message": "OpenTelemetry indisponivel; tracing desativado"}, ensure_ascii=False), flush=True)
+        return None
+    resource = Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME", "sentinela-7-api")})
+    provider = TracerProvider(resource=resource)
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318/v1/traces"))))
+    trace.set_tracer_provider(provider)
+    FlaskInstrumentor().instrument_app(app)
+    return trace.get_tracer("sentinela.dashboard_api")
+
+
+TRACER = setup_tracing()
+
+
+def set_trace_attrs(**attrs):
+    if not trace:
+        return
+    try:
+        span = trace.get_current_span()
+        for key, value in attrs.items():
+            if value is not None:
+                span.set_attribute(key, str(value))
+    except Exception:
+        return
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc):
+    status = getattr(exc, "code", 500) or 500
+    if status < 500:
+        return jsonify({"error": getattr(exc, "name", "bad_request")}), status
+    log_json("ERROR", "Erro interno tratado", error=str(exc), path=request.path if has_request_context() else None)
+    payload = {"error": "internal_server_error"}
+    if SENTINELA_ENV != "production":
+        payload["detail"] = str(exc)
+    return jsonify(payload), 500
+
+
+def pbkdf2_hash(password, salt=None, iterations=200000):
+    salt = salt or _b64url_encode(os.urandom(16))
+    digest = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt.encode("utf-8"), iterations)
+    return f"pbkdf2_sha256${iterations}${salt}${_b64url_encode(digest)}"
+
+
+def verify_password(password, stored):
+    if not stored:
+        return False
+    if str(stored).startswith("pbkdf2_sha256$"):
+        try:
+            _, raw_iterations, salt, expected = str(stored).split("$", 3)
+            candidate = pbkdf2_hash(password, salt=salt, iterations=int(raw_iterations)).rsplit("$", 1)[1]
+            return hmac.compare_digest(candidate, expected)
+        except Exception:
+            return False
+    return hmac.compare_digest(str(password or ""), str(stored))
+
+
+def load_users():
+    raw = os.getenv("SENTINELA_USERS_JSON", "").strip()
+    if raw:
+        try:
+            users = json.loads(raw)
+            if isinstance(users, dict):
+                return {
+                    username: {
+                        "username": username,
+                        "password_hash": item.get("password_hash") or item.get("password"),
+                        "role": item.get("role", "viewer"),
+                        "tenant_id": item.get("tenant_id", DEFAULT_TENANT_ID),
+                    }
+                    for username, item in users.items()
+                    if isinstance(item, dict)
+                }
+            if isinstance(users, list):
+                return {
+                    item["username"]: {
+                        "username": item["username"],
+                        "password_hash": item.get("password_hash") or item.get("password"),
+                        "role": item.get("role", "viewer"),
+                        "tenant_id": item.get("tenant_id", DEFAULT_TENANT_ID),
+                    }
+                    for item in users
+                    if isinstance(item, dict) and item.get("username")
+                }
+        except Exception as exc:
+            print(json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "level": "WARN", "component": "dashboard_api", "message": "SENTINELA_USERS_JSON invalido; usando usuarios padrao", "error": str(exc)}, ensure_ascii=False), flush=True)
+    return {
+        SENTINELA_USER: {"username": SENTINELA_USER, "password_hash": SENTINELA_PASSWORD, "role": "admin", "tenant_id": DEFAULT_TENANT_ID},
+        "analyst": {"username": "analyst", "password_hash": os.getenv("SENTINELA_ANALYST_PASSWORD", "analyst"), "role": "analyst", "tenant_id": DEFAULT_TENANT_ID},
+        "viewer": {"username": "viewer", "password_hash": os.getenv("SENTINELA_VIEWER_PASSWORD", "viewer"), "role": "viewer", "tenant_id": DEFAULT_TENANT_ID},
+    }
+
+
+USERS = load_users()
 
 
 def now_iso():
@@ -105,12 +252,17 @@ def now_iso():
 
 
 def log_json(level, message, **fields):
+    sensitive = {"password", "senha", "token", "authorization", "jwt", "secret", "api_key", "apikey", "key"}
+    safe_fields = {}
+    for key, value in fields.items():
+        marker = str(key).lower()
+        safe_fields[key] = "***redacted***" if any(item in marker for item in sensitive) else value
     payload = {
         "ts": now_iso(),
         "level": level,
         "component": "dashboard_api",
         "message": message,
-        **fields,
+        **safe_fields,
     }
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
@@ -122,15 +274,36 @@ def backoff_delay(attempt):
 @app.before_request
 def begin_request_timer():
     request._sentinela_started_at = time.time()
-    if request.path in {"/health", "/metrics", "/metrics/prometheus"}:
+    request._sentinela_correlation_id = request.headers.get("X-Correlation-ID") or request.args.get("correlation_id") or str(uuid.uuid4())
+    set_trace_attrs(correlation_id=request._sentinela_correlation_id, route=request.path, tenant_id=request.headers.get("X-Tenant-ID"))
+    if request.path in {"/health", "/ready", "/metrics", "/metrics/prometheus"}:
+        return None
+    if not ENABLE_RATE_LIMITING:
+        return None
+    bucket_type = RATE_LIMIT_ENDPOINTS.get((request.method, request.path))
+    if not bucket_type:
         return None
     now = time.time()
     client = request.headers.get("X-Forwarded-For", request.remote_addr or "local").split(",")[0].strip()
-    bucket = RATE_LIMIT_BUCKETS[client]
+    identity_hint = request.headers.get("Authorization", "")[:16] or request.headers.get("X-SENTINELA-TOKEN", "")[:16]
+    bucket_key = f"{bucket_type}:{client}:{request.path}:{identity_hint}"
+    limit = RATE_LIMIT_AUTH_PER_MINUTE if bucket_type == "auth" else RATE_LIMIT_API_PER_MINUTE
+    bucket = RATE_LIMIT_BUCKETS[bucket_key]
     while bucket and now - bucket[0] > 60:
         bucket.popleft()
-    if len(bucket) >= RATE_LIMIT_PER_MINUTE:
-        return jsonify({"error": "rate_limited", "limit_per_minute": RATE_LIMIT_PER_MINUTE}), 429
+    if len(bucket) >= limit:
+        RATE_LIMITED_REQUESTS.labels(endpoint=request.path).inc()
+        try:
+            write_audit(
+                action="rate_limit_exceeded",
+                resource_type="endpoint",
+                resource_id=request.path,
+                success=False,
+                metadata={"limit_per_minute": limit, "method": request.method},
+            )
+        except Exception:
+            pass
+        return jsonify({"error": "rate_limited", "limit_per_minute": limit}), 429
     bucket.append(now)
     return None
 
@@ -148,6 +321,7 @@ def record_request_metrics(response):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    response.headers["X-Correlation-ID"] = getattr(request, "_sentinela_correlation_id", "")
     return response
 
 
@@ -295,6 +469,12 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'simulation'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_notes TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
+        cur.execute("UPDATE alertas SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_tenant_ts ON alertas (tenant_id, ts DESC)")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alertas_idempotency_key ON alertas (idempotency_key) WHERE idempotency_key IS NOT NULL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS blacklist (
@@ -379,6 +559,9 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS recommended_action TEXT")
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'simulation'")
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed'")
+        cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
+        cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
+        cur.execute("UPDATE incidents SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS incident_alerts (
@@ -404,12 +587,35 @@ def ensure_schema(conn):
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_incident_id ON incidents (incident_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_tenant_last_seen ON incidents (tenant_id, last_seen DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_primary_source_ip ON incidents (primary_source_ip)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents (status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_last_seen ON incidents (last_seen DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_id ON incident_alerts (incident_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_alerts_alert_id ON incident_alerts (alert_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_audit_incident_id ON incident_audit_log (incident_id)")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_idempotency_key ON incidents (idempotency_key) WHERE idempotency_key IS NOT NULL")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                tenant_id TEXT DEFAULT 'default',
+                actor_user TEXT,
+                actor_role TEXT,
+                action TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id TEXT,
+                correlation_id TEXT,
+                source_ip TEXT,
+                success BOOLEAN DEFAULT TRUE,
+                metadata_json JSONB DEFAULT '{}'::jsonb
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_ts ON audit_logs (tenant_id, timestamp DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs (resource_type)")
     conn.commit()
 
 
@@ -422,11 +628,15 @@ def _b64url_decode(data):
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
 
 
-def create_jwt(subject="sentinela-demo", ttl_seconds=None):
+def create_jwt(subject="sentinela-demo", ttl_seconds=None, role="admin", tenant_id=None, token_use="access"):
     ttl = JWT_TTL_SECONDS if ttl_seconds is None else int(ttl_seconds)
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
         "sub": subject,
+        "role": role if role in VALID_ROLES else "viewer",
+        "tenant_id": tenant_id or DEFAULT_TENANT_ID,
+        "token_use": token_use,
+        "jti": str(uuid.uuid4()),
         "iat": int(time.time()),
         "exp": int(time.time()) + ttl,
     }
@@ -437,40 +647,95 @@ def create_jwt(subject="sentinela-demo", ttl_seconds=None):
     return f"{header_b64}.{payload_b64}.{_b64url_encode(signature)}"
 
 
-def verify_jwt(token):
+def decode_jwt(token):
     try:
         header_b64, payload_b64, signature_b64 = token.split(".")
         signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
         expected = hmac.new(JWT_SECRET.encode("utf-8"), signing_input, hashlib.sha256).digest()
         if not hmac.compare_digest(expected, _b64url_decode(signature_b64)):
-            return False
+            return None
         payload = json.loads(_b64url_decode(payload_b64))
-        return int(payload.get("exp", 0)) >= int(time.time())
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        payload["role"] = payload.get("role") if payload.get("role") in VALID_ROLES else "viewer"
+        payload["tenant_id"] = payload.get("tenant_id") or DEFAULT_TENANT_ID
+        payload["token_use"] = payload.get("token_use") or "access"
+        return payload
     except Exception:
-        return False
+        return None
+
+
+def verify_jwt(token):
+    return decode_jwt(token) is not None
+
+
+def authenticate_user(username, password):
+    user = USERS.get(username or "")
+    if user and verify_password(password, user.get("password_hash")):
+        return {
+            "sub": user["username"],
+            "role": user.get("role", "viewer"),
+            "tenant_id": user.get("tenant_id") or DEFAULT_TENANT_ID,
+        }
+    return None
+
+
+def current_identity():
+    if not has_request_context():
+        return {"sub": "system", "role": "admin", "tenant_id": DEFAULT_TENANT_ID}
+    if not ENABLE_AUTH:
+        return {"sub": "auth-disabled", "role": "admin", "tenant_id": request.headers.get("X-Tenant-ID") or DEFAULT_TENANT_ID}
+    bearer = request.headers.get("Authorization", "")
+    if bearer.startswith("Bearer "):
+        raw_token = bearer.split(" ", 1)[1].strip()
+        payload = decode_jwt(raw_token)
+        if payload and payload.get("token_use") == "access":
+            return {"sub": payload.get("sub"), "role": payload.get("role", "viewer"), "tenant_id": payload.get("tenant_id") or DEFAULT_TENANT_ID}
+        if hmac.compare_digest(raw_token, API_TOKEN):
+            return {"sub": "legacy-token", "role": "admin", "tenant_id": request.headers.get("X-Tenant-ID") or DEFAULT_TENANT_ID}
+    basic = request.authorization
+    if basic:
+        identity = authenticate_user(basic.username, basic.password)
+        if identity:
+            return identity
+    legacy = request.headers.get("X-SENTINELA-TOKEN")
+    if legacy and hmac.compare_digest(legacy, API_TOKEN):
+        return {"sub": "legacy-token", "role": "admin", "tenant_id": request.headers.get("X-Tenant-ID") or DEFAULT_TENANT_ID}
+    return None
 
 
 def token_is_valid():
-    if not ENABLE_AUTH:
-        return True
-    basic = request.authorization
-    if basic and hmac.compare_digest(basic.username or "", SENTINELA_USER) and SENTINELA_PASSWORD and hmac.compare_digest(basic.password or "", SENTINELA_PASSWORD):
-        return True
-    bearer = request.headers.get("Authorization", "")
-    if bearer.startswith("Bearer "):
-        return verify_jwt(bearer.split(" ", 1)[1].strip())
-    legacy = request.headers.get("X-SENTINELA-TOKEN")
-    return bool(legacy and hmac.compare_digest(legacy, API_TOKEN))
+    return current_identity() is not None
 
 
-def require_auth(view):
-    @wraps(view)
-    def wrapped(*args, **kwargs):
-        if not token_is_valid():
-            return jsonify({"error": "unauthorized"}), 401
-        return view(*args, **kwargs)
+def tenant_id():
+    identity = current_identity() or {}
+    return identity.get("tenant_id") or DEFAULT_TENANT_ID
 
-    return wrapped
+
+def require_auth(view=None, roles=None):
+    allowed_roles = set(roles or VALID_ROLES)
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            identity = current_identity()
+            if not identity:
+                return jsonify({"error": "unauthorized"}), 401
+            if identity.get("role") not in allowed_roles:
+                return jsonify({"error": "forbidden", "required_roles": sorted(allowed_roles)}), 403
+            request.sentinela_identity = identity
+            return fn(*args, **kwargs)
+
+        return wrapped
+
+    if view is not None:
+        return decorator(view)
+    return decorator
+
+
+def require_role(*roles):
+    return require_auth(roles=roles)
 
 
 def ensure_connection():
@@ -480,6 +745,57 @@ def ensure_connection():
         ensure_schema(conn)
         SCHEMA_INITIALIZED = True
     return conn
+
+
+def request_source_ip():
+    if not has_request_context():
+        return None
+    return (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip() or None
+
+
+def write_audit(action, resource_type=None, resource_id=None, success=True, metadata=None, identity=None, tenant=None):
+    identity = identity or (current_identity() if has_request_context() else None) or {}
+    correlation_id = getattr(request, "_sentinela_correlation_id", None) if has_request_context() else None
+    metadata = metadata or {}
+    conn = None
+    try:
+        conn = ensure_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO audit_logs (
+                    tenant_id, actor_user, actor_role, action, resource_type, resource_id,
+                    correlation_id, source_ip, success, metadata_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                """,
+                (
+                    tenant or identity.get("tenant_id") or DEFAULT_TENANT_ID,
+                    identity.get("sub"),
+                    identity.get("role"),
+                    action,
+                    resource_type,
+                    resource_id,
+                    correlation_id,
+                    request_source_ip(),
+                    bool(success),
+                    json.dumps(metadata, ensure_ascii=False),
+                ),
+            )
+        conn.commit()
+    except Exception as exc:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_json("WARN", "Falha ao registrar auditoria", action=action, error=str(exc))
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def demo_mode_enabled():
@@ -703,26 +1019,28 @@ def fetch_alerts(conn):
     demo_only = mode == "demo"
     range_value = request.args.get("range", "5m")
     interval = range_to_interval(range_value)
+    tenant = tenant_id()
 
     with conn.cursor() as cur:
         if demo_only:
             cur.execute(
                 """
                 SELECT * FROM alertas
-                WHERE is_demo = TRUE OR is_replay_event = TRUE
+                WHERE tenant_id = %s AND (is_demo = TRUE OR is_replay_event = TRUE)
                 ORDER BY ts DESC
                 LIMIT 100
-                """
+                """,
+                (tenant,),
             )
         else:
             cur.execute(
                 """
                 SELECT * FROM alertas
-                WHERE ts >= NOW() - %s::interval
+                WHERE tenant_id = %s AND ts >= NOW() - %s::interval
                 ORDER BY ts DESC
                 LIMIT 100
                 """,
-                (interval,),
+                (tenant, interval),
             )
 
         rows = cur.fetchall() or []
@@ -741,6 +1059,7 @@ def fetch_alerts(conn):
 def fetch_ip_scores(conn):
     range_value = request.args.get("range", "24h")
     interval = range_to_interval(range_value)
+    tenant = tenant_id()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -752,12 +1071,12 @@ def fetch_ip_scores(conn):
                 ARRAY_AGG(DISTINCT COALESCE(severity, status)) AS severities,
                 jsonb_agg(DISTINCT COALESCE(correlation_reasons, risk_reasons, '[]'::jsonb)) AS reasons
             FROM alertas
-            WHERE ts >= NOW() - %s::interval
+            WHERE tenant_id = %s AND ts >= NOW() - %s::interval
             GROUP BY COALESCE(source_ip, ip)
             ORDER BY threat_score DESC, event_count DESC
             LIMIT 50
             """,
-            (interval,),
+            (tenant, interval),
         )
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
@@ -771,32 +1090,33 @@ def fetch_ip_scores(conn):
 
 
 def fetch_alert_rows(conn, source_ip=None, limit=200):
+    tenant = tenant_id()
     with conn.cursor() as cur:
         if source_ip:
             cur.execute(
                 """
                 SELECT * FROM (
                     SELECT * FROM alertas
-                    WHERE COALESCE(source_ip, ip) = %s
+                    WHERE tenant_id = %s AND COALESCE(source_ip, ip) = %s
                     ORDER BY ts DESC
                     LIMIT %s
                 ) recent_alerts
                 ORDER BY ts ASC
                 """,
-                (source_ip, limit),
+                (tenant, source_ip, limit),
             )
         else:
             cur.execute(
                 """
                 SELECT * FROM (
                     SELECT * FROM alertas
-                    WHERE ts >= NOW() - INTERVAL '24 hours'
+                    WHERE tenant_id = %s AND ts >= NOW() - INTERVAL '24 hours'
                     ORDER BY ts DESC
                     LIMIT %s
                 ) recent_alerts
                 ORDER BY ts ASC
                 """,
-                (limit,),
+                (tenant, limit),
             )
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
@@ -1239,7 +1559,7 @@ def lifecycle_from_status(status):
 
 def fetch_incident_by_id(conn, incident_id):
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM incidents WHERE incident_id = %s", (incident_id,))
+        cur.execute("SELECT * FROM incidents WHERE tenant_id = %s AND incident_id = %s", (tenant_id(), incident_id))
         row = cur.fetchone()
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
     return row_to_incident(row, columns) if row else None
@@ -1257,11 +1577,11 @@ def fetch_candidate_incidents(conn):
         cur.execute(
             """
             SELECT * FROM incidents
-            WHERE status = ANY(%s) OR last_seen >= NOW() - INTERVAL '24 hours'
+            WHERE tenant_id = %s AND (status = ANY(%s) OR last_seen >= NOW() - INTERVAL '24 hours')
             ORDER BY last_seen DESC
             LIMIT 200
             """,
-            (list(OPEN_INCIDENT_STATUSES),),
+            (tenant_id(), list(OPEN_INCIDENT_STATUSES)),
         )
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
@@ -1300,6 +1620,7 @@ def create_incident_from_alert(conn, alert):
     reasons = derive_correlation_reasons(alert)
     incident = {
         "incident_id": incident_id_for(entities["source_ip"] or "unknown", entities["replay_id"]),
+        "tenant_id": alert.get("tenant_id") or tenant_id(),
         "severity": "LOW" if normalize_event_type(alert.get("event_type")) == "FALSE_POSITIVE" else severity_from_score(entities["score"]),
         "max_score": 0 if normalize_event_type(alert.get("event_type")) == "FALSE_POSITIVE" else entities["score"],
         "primary_source_ip": entities["source_ip"],
@@ -1325,6 +1646,7 @@ def create_incident_from_alert(conn, alert):
             """
             INSERT INTO incidents (
                 incident_id, title, description, status, severity, max_score,
+                tenant_id,
                 primary_source_ip, source_ips, destination_ip, usernames, services,
                 event_types, mitre_techniques, correlation_reasons, replay_ids,
                 first_seen, last_seen, event_count, human_summary, analyst_notes,
@@ -1332,6 +1654,7 @@ def create_incident_from_alert(conn, alert):
             )
             VALUES (
                 %(incident_id)s, %(title)s, %(description)s, %(status)s, %(severity)s, %(max_score)s,
+                %(tenant_id)s,
                 %(primary_source_ip)s, %(source_ips)s::jsonb, %(destination_ip)s, %(usernames)s::jsonb,
                 %(services)s::jsonb, %(event_types)s::jsonb, %(mitre_techniques)s::jsonb,
                 %(correlation_reasons)s::jsonb, %(replay_ids)s::jsonb, %(first_seen)s, %(last_seen)s,
@@ -1388,8 +1711,9 @@ def update_incident_from_alert(conn, incident, alert, reasons=None):
                 human_summary = %(human_summary)s,
                 updated_at = NOW()
             WHERE incident_id = %(incident_id)s
+              AND tenant_id = %(tenant_id)s
             """,
-            {**updated, **{key: json.dumps(updated[key], ensure_ascii=False) for key in ("source_ips", "usernames", "services", "event_types", "mitre_techniques", "correlation_reasons", "replay_ids")}},
+            {**updated, "tenant_id": incident.get("tenant_id") or tenant_id(), **{key: json.dumps(updated[key], ensure_ascii=False) for key in ("source_ips", "usernames", "services", "event_types", "mitre_techniques", "correlation_reasons", "replay_ids")}},
         )
     return fetch_incident_by_id(conn, incident["incident_id"]) or normalize_incident_record(updated)
 
@@ -1437,7 +1761,7 @@ def materialize_incidents(conn, alerts):
 
 def fetch_persisted_incidents(conn, limit=100, offset=0):
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM incidents ORDER BY last_seen DESC, max_score DESC LIMIT %s OFFSET %s", (limit, offset))
+        cur.execute("SELECT * FROM incidents WHERE tenant_id = %s ORDER BY last_seen DESC, max_score DESC LIMIT %s OFFSET %s", (tenant_id(), limit, offset))
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
     return [item for item in (row_to_incident(row, columns) for row in rows) if item]
@@ -1445,7 +1769,7 @@ def fetch_persisted_incidents(conn, limit=100, offset=0):
 
 def count_persisted_incidents(conn):
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM incidents")
+        cur.execute("SELECT COUNT(*) FROM incidents WHERE tenant_id = %s", (tenant_id(),))
         row = cur.fetchone()
     return int(row[0] or 0) if row else 0
 
@@ -1457,11 +1781,11 @@ def fetch_incident_alerts(conn, incident_id, limit=500, offset=0):
             SELECT a.*
             FROM incident_alerts ia
             JOIN alertas a ON ia.alert_id = COALESCE(a.event_id::text, a.id::text)
-            WHERE ia.incident_id = %s
+            WHERE a.tenant_id = %s AND ia.incident_id = %s
             ORDER BY a.ts ASC
             LIMIT %s OFFSET %s
             """,
-            (incident_id, limit, offset),
+            (tenant_id(), incident_id, limit, offset),
         )
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
@@ -1470,7 +1794,15 @@ def fetch_incident_alerts(conn, incident_id, limit=500, offset=0):
 
 def count_incident_alerts(conn, incident_id):
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM incident_alerts WHERE incident_id = %s", (incident_id,))
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM incident_alerts ia
+            JOIN alertas a ON ia.alert_id = COALESCE(a.event_id::text, a.id::text)
+            WHERE a.tenant_id = %s AND ia.incident_id = %s
+            """,
+            (tenant_id(), incident_id),
+        )
         row = cur.fetchone()
     return int(row[0] or 0) if row else 0
 
@@ -1612,6 +1944,7 @@ def build_investigation(conn, source_ip):
 
 
 def fetch_demo_summary(conn):
+    tenant = tenant_id()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1621,8 +1954,9 @@ def fetch_demo_summary(conn):
                 COUNT(*) FILTER (WHERE is_replay_event = TRUE) AS replay_events,
                 COUNT(*) FILTER (WHERE simulated_block = TRUE) AS simulated_blocks
             FROM alertas
-            WHERE ts >= NOW() - INTERVAL '24 hours'
-            """
+            WHERE tenant_id = %s AND ts >= NOW() - INTERVAL '24 hours'
+            """,
+            (tenant,),
         )
         summary_row = cur.fetchone() or [0, 0, 0, 0]
         cur.execute(
@@ -1630,22 +1964,24 @@ def fetch_demo_summary(conn):
             SELECT COALESCE(source_ip, ip) AS source_ip,
                    MAX(COALESCE(threat_score, score_final, risco, 0)) AS threat_score
             FROM alertas
-            WHERE ts >= NOW() - INTERVAL '24 hours'
+            WHERE tenant_id = %s AND ts >= NOW() - INTERVAL '24 hours'
             GROUP BY COALESCE(source_ip, ip)
             ORDER BY threat_score DESC
             LIMIT 1
-            """
+            """,
+            (tenant,),
         )
         top_row = cur.fetchone()
         cur.execute(
             """
             SELECT COALESCE(severity, status, 'LOW') AS severity, COUNT(*) AS total
             FROM alertas
-            WHERE ts >= NOW() - INTERVAL '24 hours'
+            WHERE tenant_id = %s AND ts >= NOW() - INTERVAL '24 hours'
             GROUP BY COALESCE(severity, status, 'LOW')
             ORDER BY total DESC
             LIMIT 1
-            """
+            """,
+            (tenant,),
         )
         severity_row = cur.fetchone()
 
@@ -1713,10 +2049,103 @@ def metric_rows(conn):
         cur.execute(
             """
             SELECT * FROM alertas
-            WHERE ts >= NOW() - INTERVAL '24 hours'
+            WHERE tenant_id = %s AND ts >= NOW() - INTERVAL '24 hours'
             ORDER BY ts ASC
             LIMIT 1000
+            """,
+            (tenant_id(),),
+        )
+        rows = cur.fetchall() or []
+        columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+    return [enrich_alert(row_to_dict(row, columns)) for row in rows]
+
+
+def alert_search_document(alert):
+    return {
+        "id": str(alert.get("event_id") or alert.get("id") or ""),
+        "tenant_id": alert.get("tenant_id") or DEFAULT_TENANT_ID,
+        "correlation_id": alert.get("correlation_id") or alert.get("event_id"),
+        "severity": alert.get("severity"),
+        "status": alert.get("status"),
+        "source": alert.get("source_ip") or alert.get("ip"),
+        "rule_id": alert.get("internal_rule_id") or alert.get("rule_id"),
+        "timestamp": alert.get("ts") or alert.get("timestamp"),
+        "description": alert.get("human_summary") or alert.get("explanation"),
+        "evidence": alert.get("correlation_reasons") or alert.get("risk_reasons") or [],
+        "event_type": alert.get("event_type"),
+        "mitre_id": alert.get("mitre_id"),
+    }
+
+
+def opensearch_request(path, method="GET", payload=None, timeout=1.5):
+    url = f"{OPENSEARCH_URL}{path}"
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    req = UrlRequest(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    with urlopen(req, timeout=timeout) as response:
+        raw = response.read().decode("utf-8")
+        return json.loads(raw) if raw else {}
+
+
+def opensearch_available():
+    if not ENABLE_OPENSEARCH:
+        return False
+    try:
+        opensearch_request("/", timeout=0.8)
+        return True
+    except Exception:
+        return False
+
+
+def search_opensearch(query, limit, offset):
+    if not opensearch_available():
+        return None
+    tenant = tenant_id()
+    should = [
+        {"match": {"description": query}},
+        {"match": {"status": query}},
+        {"match": {"severity": query}},
+        {"match": {"source": query}},
+        {"match": {"rule_id": query}},
+        {"match": {"correlation_id": query}},
+        {"match": {"event_type": query}},
+        {"match": {"mitre_id": query}},
+    ]
+    payload = {
+        "from": offset,
+        "size": limit,
+        "sort": [{"timestamp": {"order": "desc"}}],
+        "query": {
+            "bool": {
+                "filter": [{"term": {"tenant_id.keyword": tenant}}],
+                "must": [{"match_all": {}}] if not query else [{"bool": {"should": should, "minimum_should_match": 1}}],
+            }
+        },
+    }
+    result = opensearch_request(f"/{OPENSEARCH_INDEX_ALERTS}/_search", method="POST", payload=payload, timeout=2.0)
+    hits = result.get("hits", {}).get("hits", [])
+    return [{"_score": hit.get("_score"), **(hit.get("_source") or {})} for hit in hits]
+
+
+def search_postgres(conn, query, limit, offset):
+    with conn.cursor() as cur:
+        cur.execute(
             """
+            SELECT * FROM alertas
+            WHERE tenant_id = %s
+              AND (
+                %s = ''
+                OR COALESCE(source_ip, ip, '') ILIKE %s
+                OR COALESCE(event_type, '') ILIKE %s
+                OR COALESCE(status, '') ILIKE %s
+                OR COALESCE(severity, '') ILIKE %s
+                OR COALESCE(mitre_id, '') ILIKE %s
+                OR COALESCE(correlation_id, '') ILIKE %s
+                OR COALESCE(human_summary, explanation, '') ILIKE %s
+              )
+            ORDER BY ts DESC
+            LIMIT %s OFFSET %s
+            """,
+            (tenant_id(), query, f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", limit, offset),
         )
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
@@ -1828,6 +2257,7 @@ def build_demo_alerts():
         alert = {
             "id": str(uuid.uuid4()),
             "event_id": str(uuid.uuid4()),
+            "tenant_id": tenant_id(),
             "ip": attacker_ip,
             "source_ip": attacker_ip,
             "status": severity,
@@ -1916,8 +2346,9 @@ def build_demo_alerts():
 
 
 def persist_demo_alerts(conn, alerts):
+    tenant = tenant_id()
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM alertas WHERE is_demo = TRUE;")
+        cur.execute("DELETE FROM alertas WHERE is_demo = TRUE AND tenant_id = %s;", (tenant,))
     conn.commit()
 
     with conn.cursor() as cur:
@@ -1941,7 +2372,7 @@ def persist_demo_alerts(conn, alerts):
                     target_user, target_service, target_port, target_container,
                     target_application, environment, asset_owner, asset_criticality,
                     business_impact, recommended_action, action_reason, execution_mode,
-                    execution_status, execution_notes
+                    execution_status, execution_notes, tenant_id
                 )
                 VALUES (
                     %(event_id)s, %(ip)s, %(status)s, %(risco)s, %(score_final)s,
@@ -1967,7 +2398,7 @@ def persist_demo_alerts(conn, alerts):
                     %(target_user)s, %(target_service)s, %(target_port)s, %(target_container)s,
                     %(target_application)s, %(environment)s, %(asset_owner)s, %(asset_criticality)s,
                     %(business_impact)s, %(recommended_action)s, %(action_reason)s, %(execution_mode)s,
-                    %(execution_status)s, %(execution_notes)s
+                    %(execution_status)s, %(execution_notes)s, %(tenant_id)s
                 )
                 ON CONFLICT (event_id) DO UPDATE SET
                     status = EXCLUDED.status,
@@ -2084,17 +2515,25 @@ def refresh_prometheus_db_gauges(conn):
             INCIDENTS_SEVERITY_GAUGE.labels(severity=severity).set(int(total or 0))
         cur.execute("SELECT COUNT(*) FROM alertas WHERE ts >= NOW() - INTERVAL '1 minute'")
         EVENTS_PER_MINUTE_GAUGE.set(int((cur.fetchone() or [0])[0] or 0))
+        cur.execute("SELECT COALESCE(tenant_id, %s), COUNT(*) FROM alertas WHERE ts >= NOW() - INTERVAL '24 hours' GROUP BY COALESCE(tenant_id, %s)", (DEFAULT_TENANT_ID, DEFAULT_TENANT_ID))
+        for tenant, total in cur.fetchall() or []:
+            PROCESSED_EVENTS_BY_TENANT.labels(tenant_id=tenant).set(int(total or 0))
 
 
 @app.get("/health")
 def health():
+    return jsonify({"status": "ok", "service": "dashboard_api", "ready": SCHEMA_INITIALIZED})
+
+
+@app.get("/ready")
+def ready():
     try:
         conn = ensure_connection()
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
             cur.fetchone()
         conn.close()
-        return jsonify({"status": "ok", "dependencies": {"postgres": "ok"}, "ready": SCHEMA_INITIALIZED})
+        return jsonify({"status": "ok", "dependencies": {"postgres": "ok"}, "ready": True})
     except Exception as exc:
         return jsonify({"status": "error", "error": str(exc)}), 503
 
@@ -2133,10 +2572,71 @@ def rules():
 
 @app.post("/auth/token")
 def auth_token():
-    if ENABLE_AUTH and not token_is_valid():
-        return jsonify({"error": "unauthorized"}), 401
     REQUEST_COUNTER.labels(endpoint="auth_token").inc()
-    return jsonify({"token": create_jwt(), "token_type": "Bearer", "expires_in": JWT_TTL_SECONDS})
+    payload = request.get_json(silent=True) or {}
+    identity = None
+    if payload.get("username") or payload.get("password"):
+        identity = authenticate_user(payload.get("username"), payload.get("password"))
+        if not identity:
+            write_audit(
+                action="login_failed",
+                resource_type="auth",
+                resource_id=payload.get("username") or "unknown",
+                success=False,
+                identity={"sub": payload.get("username") or "unknown", "role": None, "tenant_id": DEFAULT_TENANT_ID},
+                metadata={"reason": "invalid_credentials"},
+            )
+            return jsonify({"error": "invalid_credentials"}), 401
+    elif ENABLE_AUTH:
+        identity = current_identity()
+        if not identity:
+            write_audit(action="login_failed", resource_type="auth", resource_id="token", success=False, metadata={"reason": "unauthorized"})
+            return jsonify({"error": "unauthorized"}), 401
+    else:
+        identity = {"sub": SENTINELA_USER, "role": "admin", "tenant_id": DEFAULT_TENANT_ID}
+    access_ttl = ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    refresh_ttl = REFRESH_TOKEN_EXPIRE_MINUTES * 60
+    access_token = create_jwt(subject=identity["sub"], ttl_seconds=access_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="access")
+    refresh_token = create_jwt(subject=identity["sub"], ttl_seconds=refresh_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="refresh")
+    write_audit(action="login_success", resource_type="auth", resource_id=identity["sub"], success=True, identity=identity)
+    return jsonify({
+        "token": access_token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
+        "expires_in": access_ttl,
+        "refresh_expires_in": refresh_ttl,
+        "user": identity,
+    })
+
+
+@app.post("/auth/refresh")
+def auth_refresh():
+    REQUEST_COUNTER.labels(endpoint="auth_refresh").inc()
+    payload = request.get_json(silent=True) or {}
+    raw_token = (payload.get("refresh_token") or "").strip()
+    if not raw_token:
+        bearer = request.headers.get("Authorization", "")
+        raw_token = bearer.split(" ", 1)[1].strip() if bearer.startswith("Bearer ") else ""
+    decoded = decode_jwt(raw_token) if raw_token else None
+    if not decoded or decoded.get("token_use") != "refresh":
+        write_audit(action="refresh_failed", resource_type="auth", resource_id=decoded.get("sub") if decoded else "unknown", success=False, metadata={"reason": "invalid_refresh_token"})
+        return jsonify({"error": "invalid_refresh_token"}), 401
+    identity = {"sub": decoded.get("sub"), "role": decoded.get("role", "viewer"), "tenant_id": decoded.get("tenant_id") or DEFAULT_TENANT_ID}
+    access_ttl = ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    refresh_ttl = REFRESH_TOKEN_EXPIRE_MINUTES * 60
+    access_token = create_jwt(subject=identity["sub"], ttl_seconds=access_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="access")
+    refresh_token = create_jwt(subject=identity["sub"], ttl_seconds=refresh_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="refresh")
+    write_audit(action="refresh_token", resource_type="auth", resource_id=identity["sub"], success=True, identity=identity)
+    return jsonify({
+        "token": access_token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
+        "expires_in": access_ttl,
+        "refresh_expires_in": refresh_ttl,
+        "user": identity,
+    })
 
 
 @app.get("/alertas")
@@ -2237,6 +2737,115 @@ def metrics_summary():
         conn.close()
 
 
+@app.get("/search")
+@require_auth
+def search():
+    REQUEST_COUNTER.labels(endpoint="search").inc()
+    query = (request.args.get("q") or "").strip()[:120]
+    limit, offset = pagination_params(default_limit=50, max_limit=200)
+    set_trace_attrs(correlation_id=getattr(request, "_sentinela_correlation_id", None), tenant_id=tenant_id(), search_query=query)
+    conn = ensure_connection()
+    try:
+        search_backend = "postgres"
+        data = None
+        try:
+            data = search_opensearch(query, limit, offset)
+            if data is not None:
+                search_backend = "opensearch"
+        except Exception as exc:
+            log_json("WARN", "OpenSearch indisponivel; usando fallback Postgres", error=str(exc), tenant_id=tenant_id())
+        if data is None:
+            data = search_postgres(conn, query, limit, offset)
+        return jsonify({"query": query, "backend": search_backend, "count": len(data), "limit": limit, "offset": offset, "data": data})
+    finally:
+        conn.close()
+
+
+@app.get("/audit")
+@require_role("admin")
+def audit_logs():
+    REQUEST_COUNTER.labels(endpoint="audit").inc()
+    limit, _ = pagination_params(default_limit=100, max_limit=500)
+    action = request.args.get("action")
+    resource_type = request.args.get("resource_type")
+    filters = ["tenant_id = %s"]
+    params = [tenant_id()]
+    if action:
+        filters.append("action = %s")
+        params.append(action)
+    if resource_type:
+        filters.append("resource_type = %s")
+        params.append(resource_type)
+    params.append(limit)
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, timestamp, tenant_id, actor_user, actor_role, action,
+                       resource_type, resource_id, correlation_id, source_ip,
+                       success, metadata_json
+                FROM audit_logs
+                WHERE {' AND '.join(filters)}
+                ORDER BY timestamp DESC
+                LIMIT %s
+                """,
+                tuple(params),
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        return jsonify({"count": len(rows), "limit": limit, "data": [row_to_dict(row, columns) for row in rows]})
+    finally:
+        conn.close()
+
+
+if sock:
+    @sock.route("/ws/alerts")
+    def ws_alerts(ws):
+        last_seen_id = None
+        token = (request.args.get("token") or "").strip()
+        payload = decode_jwt(token) if token else None
+        identity = (
+            {"sub": payload.get("sub"), "role": payload.get("role", "viewer"), "tenant_id": payload.get("tenant_id") or DEFAULT_TENANT_ID}
+            if payload and payload.get("token_use") == "access" else current_identity()
+        )
+        if not identity:
+            ws.send(json.dumps({"type": "error", "error": "unauthorized"}))
+            return
+        WEBSOCKET_CONNECTIONS.inc()
+        set_trace_attrs(tenant_id=identity.get("tenant_id"), websocket="alerts")
+        while True:
+            try:
+                conn = ensure_connection()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT * FROM alertas
+                        WHERE tenant_id = %s
+                        ORDER BY ts DESC
+                        LIMIT 1
+                        """,
+                        (identity.get("tenant_id") or DEFAULT_TENANT_ID,),
+                    )
+                    row = cur.fetchone()
+                    columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+                conn.close()
+                if row:
+                    alert = enrich_alert(row_to_dict(row, columns))
+                    current_id = str(alert.get("event_id") or alert.get("id"))
+                    if current_id and current_id != last_seen_id:
+                        last_seen_id = current_id
+                        ws.send(json.dumps({"type": "alert", "data": alert}, ensure_ascii=False, default=str))
+                time.sleep(2)
+            except Exception as exc:
+                try:
+                    ws.send(json.dumps({"type": "error", "error": str(exc)}))
+                except Exception:
+                    WEBSOCKET_CONNECTIONS.dec()
+                    return
+                time.sleep(2)
+
+
 @app.get("/campaigns")
 @require_auth
 def campaigns():
@@ -2304,7 +2913,7 @@ def incident_detail(incident_id):
 
 
 @app.patch("/incidents/<incident_id>")
-@require_auth
+@require_role("admin", "analyst")
 def update_incident(incident_id):
     REQUEST_COUNTER.labels(endpoint="incident_update").inc()
     payload = request.get_json(silent=True) or {}
@@ -2342,7 +2951,7 @@ def update_incident(incident_id):
                     INSERT INTO incident_audit_log (incident_id, field_changed, old_value, new_value, changed_by, changed_at)
                     VALUES (%s, %s, %s, %s, %s, NOW())
                     """,
-                    (incident_id, field, str(old_value or ""), str(new_value or ""), SENTINELA_USER),
+                    (incident_id, field, str(old_value or ""), str(new_value or ""), (current_identity() or {}).get("sub", SENTINELA_USER)),
                 )
             cur.execute(
                 """
@@ -2350,8 +2959,9 @@ def update_incident(incident_id):
                     incident_id, title, status, severity, max_score, primary_source_ip,
                     source_ips, first_seen, last_seen, event_count, human_summary,
                     analyst_notes, assigned_to, soc_action, created_at, updated_at
+                    , tenant_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), %s)
                 ON CONFLICT (incident_id) DO UPDATE SET
                     status = EXCLUDED.status,
                     analyst_notes = EXCLUDED.analyst_notes,
@@ -2374,10 +2984,18 @@ def update_incident(incident_id):
                     updates.get("analyst_notes", existing.get("analyst_notes", "")),
                     updates.get("assigned_to", existing.get("assigned_to", "")),
                     updates.get("soc_action", existing.get("soc_action", "investigação simulada")),
+                    tenant_id(),
                 ),
             )
         conn.commit()
         refreshed = enrich_incident_detail(conn, fetch_incident_by_id(conn, incident_id)) or {**existing, **updates}
+        write_audit(
+            action="incident_updated",
+            resource_type="incident",
+            resource_id=incident_id,
+            success=True,
+            metadata={"fields": sorted(updates.keys())},
+        )
         return jsonify(refreshed), 200
     finally:
         conn.close()
@@ -2587,7 +3205,7 @@ def incident_report_pdf(incident_id):
 
 
 @app.post("/demo/simulate-attack")
-@require_auth
+@require_role("admin", "analyst")
 def simulate_attack():
     REQUEST_COUNTER.labels(endpoint="demo_simulate_attack").inc()
     DEMO_COUNTER.inc()
@@ -2691,6 +3309,13 @@ def simulate_attack():
             "timeline": timeline,
             "alerts": payload_alerts,
         }
+        write_audit(
+            action="demo_ingestion_executed",
+            resource_type="demo",
+            resource_id="simulate-attack",
+            success=True,
+            metadata={"events_created": len(payload_alerts), "primary_ip": primary["ip"]},
+        )
         return jsonify(response), 201
     finally:
         conn.close()

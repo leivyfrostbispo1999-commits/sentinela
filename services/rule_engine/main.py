@@ -19,14 +19,21 @@ except ImportError:
     yaml = None
 from kafka import KafkaConsumer, KafkaProducer
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
-from threat_intel import check_ip
+from threat_intel import check_ioc, check_ip
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
 ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "security_alerts")
+DLQ_TOPIC = os.getenv("DLQ_TOPIC", "dead_letter_events")
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
 ENABLE_BLOCK = os.getenv("ENABLE_BLOCK", "false").lower() == "true"
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
+PIPELINE_MAX_RETRIES = int(os.getenv("PIPELINE_MAX_RETRIES", "3"))
+PIPELINE_RETRY_BACKOFF_MS = int(os.getenv("PIPELINE_RETRY_BACKOFF_MS", "500"))
+PIPELINE_MAX_BATCH_SIZE = int(os.getenv("PIPELINE_MAX_BATCH_SIZE", "100"))
+PIPELINE_CONSUMER_TIMEOUT_MS = int(os.getenv("PIPELINE_CONSUMER_TIMEOUT_MS", "1000"))
+PIPELINE_POLL_INTERVAL_MS = int(os.getenv("PIPELINE_POLL_INTERVAL_MS", "250"))
 RULES_PATH = Path(os.getenv("RULES_PATH", "sentinela_rules.yml"))
 
 STATE_WINDOW_SECONDS = int(os.getenv("CORRELATION_WINDOW_SECONDS", "300"))
@@ -49,6 +56,7 @@ PIPELINE_LATENCY_SECONDS = Histogram("sentinela_pipeline_latency_seconds", "Late
 KAFKA_CONSUMED = Counter("sentinela_kafka_messages_consumed_total", "Mensagens consumidas do Kafka", ["service", "topic"], registry=REGISTRY)
 SERVICE_FAILURES = Counter("sentinela_service_failures_total", "Falhas por serviço", ["service"], registry=REGISTRY)
 SERVICE_READY_GAUGE = Gauge("sentinela_service_ready", "Readiness do serviço", ["service"], registry=REGISTRY)
+DLQ_EVENTS_TOTAL = Counter("sentinela_dlq_events_total", "Eventos enviados para DLQ por serviço", ["service", "topic"], registry=REGISTRY)
 HOSTILE_CAMPAIGN_THRESHOLD = 8
 SENSITIVE_PORTS = {22, 23, 3389, 445, 5432, 3306, 6379, 9200}
 PRIVILEGED_USERS = {"admin", "root", "administrator"}
@@ -106,6 +114,8 @@ def now_iso():
 
 
 def log_json(level, message, **fields):
+    sensitive = {"password", "token", "secret", "api_key", "authorization"}
+    fields = {key: ("***redacted***" if any(item in str(key).lower() for item in sensitive) else value) for key, value in fields.items()}
     payload = {
         "ts": now_iso(),
         "level": level,
@@ -882,6 +892,17 @@ def enrich_threat_intel(ip):
     return simulated_external_threat_lookup(ip)
 
 
+def enrich_event_ioc(log):
+    for key in ("ioc", "indicator", "domain", "url", "hash", "file_hash"):
+        value = log.get(key)
+        if not value:
+            continue
+        result = check_ioc(value)
+        if result:
+            return result
+    return enrich_threat_intel(normalize_source_ip(log))
+
+
 def calculate_risk(log, events, threat_match, rules):
     event_type = normalize_event_type(log)
     port = normalize_port(log.get("port"))
@@ -955,6 +976,8 @@ def simulated_auto_response(status, risk, threat_intel_match):
 def build_alert(log, status, risk, events, risk_reasons, auto_response, simulated_block, threat, correlation_key, correlation_reason, rules=None):
     event_id = log.get("event_id") or str(uuid.uuid4())
     log["event_id"] = event_id
+    tenant_id = log.get("tenant_id") or DEFAULT_TENANT_ID
+    correlation_id = log.get("correlation_id") or event_id
 
     threat_intel_match = threat is not None
     event_type = normalize_event_type(log)
@@ -1002,6 +1025,8 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
 
     alert = {
         "event_id": aggregate_state["event_id"],
+        "tenant_id": tenant_id,
+        "correlation_id": correlation_id,
         "ts": ts_value,
         "ip": source_ip,
         "source_ip": source_ip,
@@ -1072,6 +1097,8 @@ def create_consumer():
                 group_id="rule-engine-live",
                 auto_offset_reset="latest",
                 enable_auto_commit=True,
+                max_poll_records=PIPELINE_MAX_BATCH_SIZE,
+                consumer_timeout_ms=PIPELINE_CONSUMER_TIMEOUT_MS,
                 value_deserializer=lambda message: json.loads(message.decode("utf-8")),
             )
             log_json("INFO", "Kafka conectado", topic=RAW_LOGS_TOPIC)
@@ -1126,7 +1153,7 @@ def process_log(log, producer, rules):
     log["ip"] = ip
 
     events = update_state(log)
-    threat = enrich_threat_intel(ip)
+    threat = enrich_event_ioc(log)
     RULES_EXECUTED.inc(len(rules or []))
     status, risk, risk_reasons = calculate_risk(log, events, threat, rules)
     correlation_key, correlation_reason = build_correlation(events, log)
@@ -1161,7 +1188,55 @@ def process_log(log, producer, rules):
         simulated_block=simulated_block,
         threat_source=alert["threat_source"],
         correlation_key=alert["correlation_key"],
+        tenant_id=alert.get("tenant_id"),
+        correlation_id=alert.get("correlation_id"),
     )
+
+
+def build_dlq_event(original_event, exc, failed_service="rule_engine", source_topic=RAW_LOGS_TOPIC, target_topic=ALERTS_TOPIC, retry_count=0):
+    return {
+        "original_event": original_event,
+        "error_message": str(exc),
+        "error_type": exc.__class__.__name__,
+        "failed_service": failed_service,
+        "failed_at": now_iso(),
+        "retry_count": retry_count,
+        "tenant_id": (original_event or {}).get("tenant_id") or DEFAULT_TENANT_ID,
+        "correlation_id": (original_event or {}).get("correlation_id") or (original_event or {}).get("event_id"),
+        "source_topic": source_topic,
+        "target_topic": target_topic,
+    }
+
+
+def publish_dlq(producer, dlq_event):
+    try:
+        producer.send(DLQ_TOPIC, dlq_event)
+        producer.flush(timeout=2)
+        DLQ_EVENTS_TOTAL.labels(service="rule_engine", topic=DLQ_TOPIC).inc()
+        log_json("ERROR", "Evento enviado para DLQ", topic=DLQ_TOPIC, tenant_id=dlq_event.get("tenant_id"), correlation_id=dlq_event.get("correlation_id"), error_type=dlq_event.get("error_type"))
+    except Exception as exc:
+        SERVICE_FAILURES.labels(service="rule_engine").inc()
+        log_json("ERROR", "Falha ao publicar DLQ; pipeline principal preservado", error=str(exc), topic=DLQ_TOPIC)
+
+
+def process_log_with_retry(log, producer, rules):
+    last_exc = None
+    for attempt in range(PIPELINE_MAX_RETRIES + 1):
+        try:
+            log.setdefault("pipeline_retry_count", attempt)
+            process_log(log, producer, rules)
+            return True
+        except Exception as exc:
+            last_exc = exc
+            SERVICE_FAILURES.labels(service="rule_engine").inc()
+            if attempt >= PIPELINE_MAX_RETRIES:
+                publish_dlq(producer, build_dlq_event(log, exc, retry_count=attempt))
+                return False
+            delay = PIPELINE_RETRY_BACKOFF_MS / 1000 * (2 ** attempt)
+            log_json("WARN", "Retry estruturado no rule_engine", retry_count=attempt + 1, retry_in_seconds=delay, error=str(exc), tenant_id=log.get("tenant_id"), correlation_id=log.get("correlation_id"))
+            time.sleep(delay)
+    publish_dlq(producer, build_dlq_event(log, last_exc or RuntimeError("unknown"), retry_count=PIPELINE_MAX_RETRIES))
+    return False
 
 
 def run():
@@ -1174,7 +1249,8 @@ def run():
             consumer = create_consumer()
             producer = create_producer()
             for message in consumer:
-                process_log(message.value, producer, rules)
+                process_log_with_retry(message.value, producer, rules)
+            time.sleep(PIPELINE_POLL_INTERVAL_MS / 1000)
         except Exception as exc:
             SERVICE_FAILURES.labels(service="rule_engine").inc()
             log_json("ERROR", "Erro no loop do Rule Engine; reconectando", error=str(exc))

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import sys
 import time
@@ -7,15 +8,21 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import psycopg2
-from kafka import KafkaConsumer, TopicPartition
+from kafka import KafkaConsumer, KafkaProducer, TopicPartition
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "security_alerts")
+DLQ_TOPIC = os.getenv("DLQ_TOPIC", "dead_letter_events")
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
+ENABLE_OPENSEARCH = os.getenv("ENABLE_OPENSEARCH", "false").lower() == "true"
+OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "http://opensearch:9200").rstrip("/")
+OPENSEARCH_INDEX_ALERTS = os.getenv("OPENSEARCH_INDEX_ALERTS", "sentinela-alerts")
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "db"),
     "port": int(os.getenv("DB_PORT", "5432")),
@@ -24,11 +31,16 @@ DB_CONFIG = {
     "password": os.getenv("DB_PASSWORD", "root"),
 }
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
+PIPELINE_MAX_RETRIES = int(os.getenv("PIPELINE_MAX_RETRIES", "3"))
+PIPELINE_RETRY_BACKOFF_MS = int(os.getenv("PIPELINE_RETRY_BACKOFF_MS", "500"))
+PIPELINE_MAX_BATCH_SIZE = int(os.getenv("PIPELINE_MAX_BATCH_SIZE", "100"))
+PIPELINE_CONSUMER_TIMEOUT_MS = int(os.getenv("PIPELINE_CONSUMER_TIMEOUT_MS", "1000"))
+PIPELINE_POLL_INTERVAL_MS = int(os.getenv("PIPELINE_POLL_INTERVAL_MS", "250"))
 ENABLE_NOTIFICATIONS = os.getenv("ENABLE_NOTIFICATIONS", "false").lower() == "true"
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-SENTINELA_VERSION = "SENTINELA SOC 6.0"
+SENTINELA_VERSION = "SENTINELA 7.0"
 INCIDENT_WINDOW_SECONDS = int(os.getenv("INCIDENT_WINDOW_SECONDS", "600"))
 SEVERITY_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
@@ -44,6 +56,9 @@ KAFKA_LAG = Gauge("sentinela_kafka_consumer_lag", "Lag local observado por parti
 PIPELINE_LATENCY_SECONDS = Histogram("sentinela_pipeline_latency_seconds", "Latencia entre timestamp do alerta e persistencia", buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60))
 SERVICE_FAILURES = Counter("sentinela_service_failures_total", "Falhas por serviço", ["service"])
 SERVICE_READY_GAUGE = Gauge("sentinela_service_ready", "Readiness do serviço", ["service"])
+OPENSEARCH_INDEXED = Counter("sentinela_opensearch_indexed_total", "Documentos indexados no OpenSearch", ["index"])
+OPENSEARCH_FAILURES = Counter("sentinela_opensearch_failures_total", "Falhas ao indexar no OpenSearch", ["index"])
+DLQ_EVENTS_TOTAL = Counter("sentinela_dlq_events_total", "Eventos enviados para DLQ por serviço", ["service", "topic"])
 
 
 def now_iso():
@@ -51,6 +66,8 @@ def now_iso():
 
 
 def log_json(level, message, **fields):
+    sensitive = {"password", "token", "secret", "api_key", "authorization", "webhook"}
+    fields = {key: ("***redacted***" if any(item in str(key).lower() for item in sensitive) else value) for key, value in fields.items()}
     payload = {
         "ts": now_iso(),
         "level": level,
@@ -63,6 +80,79 @@ def log_json(level, message, **fields):
 
 def backoff_delay(attempt):
     return min(MAX_BACKOFF_SECONDS, 1.5 * (2 ** min(attempt, 4)))
+
+
+def opensearch_request(path, method="GET", payload=None, timeout=2.0):
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    request = Request(f"{OPENSEARCH_URL}{path}", data=data, method=method, headers={"Content-Type": "application/json"})
+    with urlopen(request, timeout=timeout) as response:
+        raw = response.read().decode("utf-8")
+        return json.loads(raw) if raw else {}
+
+
+def ensure_opensearch_index():
+    if not ENABLE_OPENSEARCH:
+        return False
+    mapping = {
+        "mappings": {
+            "properties": {
+                "tenant_id": {"type": "keyword"},
+                "correlation_id": {"type": "keyword"},
+                "severity": {"type": "keyword"},
+                "status": {"type": "keyword"},
+                "source": {"type": "keyword"},
+                "rule_id": {"type": "keyword"},
+                "timestamp": {"type": "date"},
+                "description": {"type": "text"},
+                "evidence": {"type": "text"},
+                "event_type": {"type": "keyword"},
+                "mitre_id": {"type": "keyword"},
+            }
+        }
+    }
+    try:
+        opensearch_request(f"/{OPENSEARCH_INDEX_ALERTS}", method="PUT", payload=mapping, timeout=2.0)
+    except HTTPError as exc:
+        if exc.code not in {400}:
+            raise
+    return True
+
+
+def alert_search_document(alert):
+    return {
+        "id": str(alert.get("idempotency_key") or alert.get("event_id") or ""),
+        "event_id": str(alert.get("event_id") or ""),
+        "idempotency_key": alert.get("idempotency_key"),
+        "tenant_id": alert.get("tenant_id") or DEFAULT_TENANT_ID,
+        "correlation_id": alert.get("correlation_id") or alert.get("event_id"),
+        "severity": alert.get("severity"),
+        "status": alert.get("status"),
+        "source": alert.get("source_ip") or alert.get("ip"),
+        "rule_id": alert.get("internal_rule_id") or alert.get("rule_id"),
+        "timestamp": alert.get("ts") or alert.get("timestamp") or now_iso(),
+        "description": alert.get("human_summary") or alert.get("explanation"),
+        "evidence": alert.get("correlation_reasons") or alert.get("risk_reasons") or [],
+        "event_type": alert.get("event_type"),
+        "mitre_id": alert.get("mitre_id"),
+    }
+
+
+def index_alert_opensearch(alert):
+    if not ENABLE_OPENSEARCH:
+        return
+    document = alert_search_document(alert)
+    doc_id = document.get("idempotency_key") or document["id"] or str(uuid.uuid4())
+    for attempt in range(2):
+        try:
+            ensure_opensearch_index()
+            opensearch_request(f"/{OPENSEARCH_INDEX_ALERTS}/_doc/{doc_id}", method="PUT", payload=document, timeout=2.0)
+            OPENSEARCH_INDEXED.labels(index=OPENSEARCH_INDEX_ALERTS).inc()
+            return
+        except Exception as exc:
+            if attempt == 1:
+                OPENSEARCH_FAILURES.labels(index=OPENSEARCH_INDEX_ALERTS).inc()
+                log_json("WARN", "Falha ao indexar alerta no OpenSearch; Postgres preservado", error=str(exc), event_id=doc_id, tenant_id=document.get("tenant_id"))
+            time.sleep(0.25)
 
 
 def update_ready_gauge():
@@ -209,6 +299,12 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'simulation'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_notes TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
+        cur.execute("UPDATE alertas SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_tenant_ts ON alertas (tenant_id, ts DESC)")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alertas_idempotency_key ON alertas (idempotency_key) WHERE idempotency_key IS NOT NULL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS blacklist (
@@ -274,6 +370,9 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS recommended_action TEXT")
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'simulation'")
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed'")
+        cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
+        cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
+        cur.execute("UPDATE incidents SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS incident_alerts (
@@ -300,6 +399,7 @@ def ensure_schema(conn):
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_last_seen ON incidents (last_seen DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_alerts_alert_id ON incident_alerts (alert_id)")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_idempotency_key ON incidents (idempotency_key) WHERE idempotency_key IS NOT NULL")
     conn.commit()
 
 
@@ -314,6 +414,8 @@ def create_consumer():
                 group_id=os.getenv("ALERT_SINK_GROUP_ID", "alert-sink-v1"),
                 auto_offset_reset=os.getenv("KAFKA_AUTO_OFFSET_RESET", "earliest"),
                 enable_auto_commit=False,
+                max_poll_records=PIPELINE_MAX_BATCH_SIZE,
+                consumer_timeout_ms=PIPELINE_CONSUMER_TIMEOUT_MS,
                 value_deserializer=lambda message: json.loads(message.decode("utf-8")),
             )
             log_json("INFO", "Kafka conectado", topic=ALERTS_TOPIC)
@@ -330,8 +432,43 @@ def create_consumer():
             attempt += 1
 
 
+def create_producer():
+    attempt = 0
+    while True:
+        try:
+            return KafkaProducer(
+                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+                value_serializer=lambda value: json.dumps(value, ensure_ascii=False).encode("utf-8"),
+            )
+        except Exception as exc:
+            SERVICE_FAILURES.labels(service="alert_sink").inc()
+            delay = backoff_delay(attempt)
+            log_json("WARN", "Aguardando Kafka producer DLQ", error=str(exc), retry_in_seconds=delay)
+            time.sleep(delay)
+            attempt += 1
+
+
+def idempotency_key_for_alert(alert):
+    if alert.get("idempotency_key"):
+        return str(alert["idempotency_key"])
+    if alert.get("event_id"):
+        seed = f"event:{alert.get('event_id')}"
+    else:
+        signature = {
+            "tenant_id": alert.get("tenant_id") or DEFAULT_TENANT_ID,
+            "correlation_id": alert.get("correlation_id"),
+            "rule_id": alert.get("internal_rule_id") or alert.get("rule_id"),
+            "timestamp": alert.get("ts") or alert.get("timestamp"),
+            "source": alert.get("source_ip") or alert.get("ip"),
+            "status": alert.get("status"),
+        }
+        seed = json.dumps(signature, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
 def ensure_event_id(alert):
-    event_id = alert.get("event_id") or str(uuid.uuid4())
+    alert["idempotency_key"] = idempotency_key_for_alert(alert)
+    event_id = alert.get("event_id") or str(uuid.uuid5(uuid.NAMESPACE_URL, alert["idempotency_key"]))
     alert["event_id"] = event_id
     return event_id
 
@@ -409,6 +546,7 @@ def row_to_dict(row, columns):
 
 def candidate_incident(conn, alert):
     source_ip = alert.get("source_ip") or alert.get("ip")
+    tenant = alert.get("tenant_id") or DEFAULT_TENANT_ID
     replay_id = alert.get("replay_id")
     username = alert.get("username") or (alert.get("raw_event") or {}).get("username") if isinstance(alert.get("raw_event"), dict) else alert.get("username")
     service = service_label(alert)
@@ -416,10 +554,11 @@ def candidate_incident(conn, alert):
         cur.execute(
             """
             SELECT * FROM incidents
-            WHERE last_seen >= NOW() - INTERVAL '24 hours'
+            WHERE tenant_id = %s AND last_seen >= NOW() - INTERVAL '24 hours'
             ORDER BY last_seen DESC
             LIMIT 100
-            """
+            """,
+            (tenant,),
         )
         rows = cur.fetchall() or []
         columns = fetch_incident_columns(cur)
@@ -459,6 +598,7 @@ def mitre_payload(alert):
 
 def persist_incident_for_alert(conn, alert):
     source_ip = alert.get("source_ip") or alert.get("ip")
+    tenant = alert.get("tenant_id") or DEFAULT_TENANT_ID
     score = alert_score(alert)
     event_type = normalize_event_type(alert.get("event_type"))
     if event_type == "FALSE_POSITIVE":
@@ -481,12 +621,14 @@ def persist_incident_for_alert(conn, alert):
             """
             INSERT INTO incidents (
                 incident_id, title, description, status, severity, max_score,
+                tenant_id,
                 primary_source_ip, source_ips, destination_ip, usernames, services,
                 event_types, mitre_techniques, correlation_reasons, replay_ids,
                 first_seen, last_seen, event_count, human_summary, soc_action, created_at, updated_at
             )
             VALUES (
                 %(incident_id)s, %(title)s, %(description)s, %(status)s, %(severity)s, %(max_score)s,
+                %(tenant_id)s,
                 %(primary_source_ip)s, %(source_ips)s::jsonb, %(destination_ip)s, %(usernames)s::jsonb,
                 %(services)s::jsonb, %(event_types)s::jsonb, %(mitre_techniques)s::jsonb,
                 %(correlation_reasons)s::jsonb, %(replay_ids)s::jsonb,
@@ -509,6 +651,7 @@ def persist_incident_for_alert(conn, alert):
                 last_seen = EXCLUDED.last_seen,
                 event_count = incidents.event_count + 1,
                 human_summary = EXCLUDED.human_summary,
+                tenant_id = EXCLUDED.tenant_id,
                 updated_at = NOW()
             """,
             {
@@ -518,6 +661,7 @@ def persist_incident_for_alert(conn, alert):
                 "status": "DETECTED",
                 "severity": severity,
                 "max_score": max_score,
+                "tenant_id": tenant,
                 "primary_source_ip": existing.get("primary_source_ip") if existing else source_ip,
                 "source_ips": json.dumps(source_ips, ensure_ascii=False),
                 "destination_ip": alert.get("destination_ip") or (alert.get("raw_event") or {}).get("destination_ip") if isinstance(alert.get("raw_event"), dict) else alert.get("destination_ip"),
@@ -623,7 +767,7 @@ def persist_alert(conn, alert):
                 target_user, target_service, target_port, target_container,
                 target_application, environment, asset_owner, asset_criticality,
                 business_impact, recommended_action, action_reason, execution_mode,
-                execution_status, execution_notes
+                execution_status, execution_notes, tenant_id, correlation_id, idempotency_key
             )
             VALUES (
                 %(event_id)s, %(ip)s, %(status)s, %(risco)s, %(score_final)s,
@@ -650,7 +794,7 @@ def persist_alert(conn, alert):
                 %(target_user)s, %(target_service)s, %(target_port)s, %(target_container)s,
                 %(target_application)s, %(environment)s, %(asset_owner)s, %(asset_criticality)s,
                 %(business_impact)s, %(recommended_action)s, %(action_reason)s, %(execution_mode)s,
-                %(execution_status)s, %(execution_notes)s
+                %(execution_status)s, %(execution_notes)s, %(tenant_id)s, %(correlation_id)s, %(idempotency_key)s
             )
             ON CONFLICT (event_id) DO UPDATE SET
                 ip = EXCLUDED.ip,
@@ -721,7 +865,10 @@ def persist_alert(conn, alert):
                 action_reason = EXCLUDED.action_reason,
                 execution_mode = EXCLUDED.execution_mode,
                 execution_status = EXCLUDED.execution_status,
-                execution_notes = EXCLUDED.execution_notes
+                execution_notes = EXCLUDED.execution_notes,
+                tenant_id = EXCLUDED.tenant_id,
+                correlation_id = EXCLUDED.correlation_id,
+                idempotency_key = EXCLUDED.idempotency_key
             """,
             {
                 "event_id": event_id,
@@ -793,6 +940,9 @@ def persist_alert(conn, alert):
                 "execution_mode": alert.get("execution_mode", "simulation"),
                 "execution_status": alert.get("execution_status", "not_executed"),
                 "execution_notes": alert.get("execution_notes"),
+                "tenant_id": alert.get("tenant_id") or DEFAULT_TENANT_ID,
+                "correlation_id": alert.get("correlation_id") or event_id,
+                "idempotency_key": alert.get("idempotency_key") or idempotency_key_for_alert(alert),
             },
         )
 
@@ -816,6 +966,7 @@ def persist_alert(conn, alert):
     ALERTS_PERSISTED.inc()
     INCIDENTS_BY_SEVERITY.labels(severity=alert.get("severity", "UNKNOWN")).inc()
     PIPELINE_LATENCY_SECONDS.observe(max(0, time.time() - parse_alert_epoch(alert.get("ts"))))
+    index_alert_opensearch(alert)
     log_json("INFO", "Alerta gravado", event_id=event_id, ip=ip, status=alert.get("status"), incident_id=incident_id)
     send_notifications(alert)
 
@@ -827,16 +978,68 @@ def parse_alert_epoch(value):
         return time.time()
 
 
+def build_dlq_event(original_event, exc, failed_service="alert_sink", source_topic=ALERTS_TOPIC, target_topic=None, retry_count=0):
+    return {
+        "original_event": original_event,
+        "error_message": str(exc),
+        "error_type": exc.__class__.__name__,
+        "failed_service": failed_service,
+        "failed_at": now_iso(),
+        "retry_count": retry_count,
+        "tenant_id": (original_event or {}).get("tenant_id") or DEFAULT_TENANT_ID,
+        "correlation_id": (original_event or {}).get("correlation_id") or (original_event or {}).get("event_id"),
+        "source_topic": source_topic,
+        "target_topic": target_topic,
+    }
+
+
+def publish_dlq(producer, dlq_event):
+    try:
+        producer.send(DLQ_TOPIC, dlq_event)
+        producer.flush(timeout=2)
+        DLQ_EVENTS_TOTAL.labels(service="alert_sink", topic=DLQ_TOPIC).inc()
+        log_json("ERROR", "Evento enviado para DLQ", topic=DLQ_TOPIC, tenant_id=dlq_event.get("tenant_id"), correlation_id=dlq_event.get("correlation_id"), error_type=dlq_event.get("error_type"))
+    except Exception as exc:
+        SERVICE_FAILURES.labels(service="alert_sink").inc()
+        log_json("ERROR", "Falha ao publicar DLQ; pipeline principal preservado", error=str(exc), topic=DLQ_TOPIC)
+
+
+def persist_alert_with_retry(conn, alert, dlq_producer):
+    last_exc = None
+    for attempt in range(PIPELINE_MAX_RETRIES + 1):
+        try:
+            alert.setdefault("pipeline_retry_count", attempt)
+            persist_alert(conn, alert)
+            return True
+        except Exception as exc:
+            last_exc = exc
+            WRITE_FAILURES.inc()
+            SERVICE_FAILURES.labels(service="alert_sink").inc()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if attempt >= PIPELINE_MAX_RETRIES:
+                publish_dlq(dlq_producer, build_dlq_event(alert, exc, retry_count=attempt))
+                return False
+            delay = PIPELINE_RETRY_BACKOFF_MS / 1000 * (2 ** attempt)
+            log_json("WARN", "Retry estruturado no alert_sink", retry_count=attempt + 1, retry_in_seconds=delay, error=str(exc), tenant_id=alert.get("tenant_id"), correlation_id=alert.get("correlation_id"))
+            time.sleep(delay)
+    publish_dlq(dlq_producer, build_dlq_event(alert, last_exc or RuntimeError("unknown"), retry_count=PIPELINE_MAX_RETRIES))
+    return False
+
+
 def run():
     start_ops_server()
     consumer = create_consumer()
+    dlq_producer = create_producer()
     conn = connect_postgres()
     ensure_schema(conn)
 
     while True:
         try:
             for message in consumer:
-                persist_alert(conn, message.value)
+                persist_alert_with_retry(conn, message.value, dlq_producer)
                 try:
                     topic_partition = TopicPartition(message.topic, message.partition)
                     end_offsets = consumer.end_offsets([topic_partition])
@@ -845,6 +1048,7 @@ def run():
                 except Exception:
                     pass
                 consumer.commit()
+            time.sleep(PIPELINE_POLL_INTERVAL_MS / 1000)
         except psycopg2.Error as exc:
             WRITE_FAILURES.inc()
             SERVICE_FAILURES.labels(service="alert_sink").inc()
@@ -860,6 +1064,7 @@ def run():
             log_json("ERROR", "Erro no Alert Sink; reconectando", error=str(exc))
             time.sleep(backoff_delay(0))
             consumer = create_consumer()
+            dlq_producer = create_producer()
 
 
 class OpsHandler(BaseHTTPRequestHandler):

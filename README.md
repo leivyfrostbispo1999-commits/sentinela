@@ -1,12 +1,27 @@
-# Sentinela SOC 6.0
+# SENTINELA 7.0
 
-Sentinela SOC 6.0 é um mini-SIEM educacional/profissional com arquitetura inspirada em ambientes reais de SOC.
+SENTINELA 7.0 é um mini-SIEM educacional/profissional com arquitetura inspirada em ambientes reais de SOC.
 
 O projeto demonstra um pipeline completo de segurança: geração e coleta de eventos, ingestão via Kafka, detecção por regras YAML, correlação temporal com state store Redis, Threat Intelligence, persistência em PostgreSQL, autenticação por token/JWT, métricas Prometheus e dashboard SOC em tempo real.
 
 Ele não pretende substituir Splunk, Elastic, QRadar, Wazuh ou outra plataforma corporativa. O objetivo é demonstrar maturidade técnica, organização de código, segurança por padrão e capacidade de evolução.
 
-## What's New in 6.0
+## What's New in 7.0 Operational Maturity
+
+- Grafana provisionado com datasource Prometheus e dashboard `SENTINELA 7.0 - Operational Maturity`.
+- Retry estruturado com backoff em `rule_engine` e `alert_sink`, DLQ Kafka `dead_letter_events` e métrica `sentinela_dlq_events_total`.
+- Backpressure básico por `PIPELINE_MAX_BATCH_SIZE`, `PIPELINE_CONSUMER_TIMEOUT_MS` e `PIPELINE_POLL_INTERVAL_MS`.
+- Idempotência forte no `alert_sink` com `idempotency_key` determinística e índice único em alertas/incidentes.
+- Refresh token em `POST /auth/refresh`, preservando compatibilidade com o campo legado `token`.
+- Auditoria persistente em `audit_logs` e endpoint admin `GET /audit`.
+- Rate limiting opcional em memória para auth, refresh, busca, audit e demo.
+- `/health` para processo vivo e `/ready` para readiness com PostgreSQL.
+- Scripts seguros: `scripts/replay_events.py` e `scripts/retention_cleanup.py`, ambos em dry-run por padrão.
+- Profile `production` com Nginx reverse proxy e TLS opcional.
+- Resolver local de secrets com suporte a `*_FILE` e Docker secrets.
+- CI GitHub Actions com pytest, py_compile e validação dos profiles Compose.
+
+## Legacy 6.0 Foundation
 
 - Incidentes persistidos em tabelas próprias (`incidents`, `incident_alerts`, `incident_audit_log`) com `PATCH /incidents/{incident_id}` seguro para status, notas, responsável e ação SOC simulada.
 - Correlação multi-IP/multi-entidade por `source_ip`, destino, usuário, serviço/porta, MITRE, replay e janela temporal.
@@ -146,8 +161,10 @@ http://localhost:5000
 
 | Endpoint | Description | Authentication |
 | --- | --- | --- |
-| `GET /health` | API and database health check. | No |
-| `POST /auth/token` | Issues a demo JWT using the legacy token. | Legacy token |
+| `GET /health` | Processo vivo da API. | No |
+| `GET /ready` | Readiness com dependência PostgreSQL. | No |
+| `POST /auth/token` | Issues access/refresh JWTs. | Login/legacy |
+| `POST /auth/refresh` | Rotaciona access token a partir de refresh token. | Refresh token |
 | `POST /demo/simulate-attack` | Registers a controlled demo incident. | Yes |
 | `GET /demo/summary` | Demo cards summary: totals, top IP, score and replay events. | Yes |
 | `GET /alertas?range=5m` | Alerts from the selected time range. | Yes |
@@ -166,6 +183,8 @@ http://localhost:5000
 | `GET /reports/incident/{incident_id}.pdf` | Relatório PDF exportável gerado localmente. | Optional |
 | `GET /reports/incident/{incident_id}.md` | Relatório Markdown exportável. | Optional |
 | `GET /rules` | Regras YAML carregadas, MITRE, score, threshold e enabled/disabled. | Optional |
+| `GET /search?q=BRUTE_FORCE` | Busca OpenSearch quando habilitado, fallback Postgres. | Yes |
+| `GET /audit` | Auditoria persistente filtrada por tenant, ação e recurso. | Admin |
 | `GET /metrics` | Métricas JSON reais para dashboard. | Yes |
 | `GET /metrics/timeline?range=24h` | Buckets temporais úteis para últimas 24h, 1h ou janelas menores. | Yes |
 | `GET /metrics/summary` | Alias explícito para resumo operacional. | Yes |
@@ -206,7 +225,10 @@ Relevant environment variables:
 ```text
 SENTINELA_API_TOKEN=sentinela-demo-token
 SENTINELA_JWT_SECRET=sentinela-demo-jwt-secret
+SENTINELA_JWT_SECRET_FILE=
 SENTINELA_JWT_TTL_SECONDS=3600
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+REFRESH_TOKEN_EXPIRE_MINUTES=10080
 ```
 
 The dashboard keeps using the legacy token header for local demo compatibility.
@@ -298,11 +320,11 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 ```
 
-Se `ENABLE_NOTIFICATIONS=true`, o `alert_sink` tenta enviar alertas críticos para Discord/Telegram apenas quando as credenciais estiverem presentes. Falhas de notificação são registradas em log e não interrompem o pipeline. A mensagem usa o formato `SENTINELA SOC 6.0 - ALERTA CRÍTICO` e reforça `bloqueio simulado apenas`.
+Se `ENABLE_NOTIFICATIONS=true`, o `alert_sink` tenta enviar alertas críticos para Discord/Telegram apenas quando as credenciais estiverem presentes. Falhas de notificação são registradas em log e não interrompem o pipeline. A mensagem usa o formato `SENTINELA 7.0 - ALERTA CRÍTICO` e reforça `bloqueio simulado apenas`.
 
 ## Demo Mode
 
-Sentinela SOC 6.0 includes a visible incident demonstration mode for presentations and recruiter walkthroughs.
+SENTINELA 7.0 includes a visible incident demonstration mode for presentations and recruiter walkthroughs.
 
 How to use:
 
@@ -456,7 +478,7 @@ If Redis is unavailable, the rule engine logs the failure and falls back to in-m
 
 ## Noise Reduction & SOC Correlation
 
-Sentinela SOC 6.0 reduces noise in the alert pipeline without removing historical retention.
+SENTINELA 7.0 reduces noise in the alert pipeline without removing historical retention.
 
 How it works:
 
@@ -537,7 +559,7 @@ infra/prometheus/prometheus.yml
 
 The default mode remains a single Kafka broker for simplicity and reliability in local demos.
 
-SENTINELA SOC 6.0 keeps the educational Compose profile:
+SENTINELA 7.0 keeps the educational Compose profile:
 
 ```powershell
 docker compose --profile kafka-lab up -d --build
@@ -644,7 +666,7 @@ README.md
 - Add service-level metrics for Kafka lag, Redis health and processing latency.
 - Add Grafana dashboards.
 - Add integration tests with Docker Compose.
-# SENTINELA SOC 6.0 - SOC/SIEM Lab Modernizado
+# SENTINELA 7.0 - SOC/SIEM Lab Modernizado
 
 > Atualizacao operacional: o projeto agora inclui observabilidade Prometheus/Grafana, healthchecks reais, testes de carga k6, migracoes Alembic, documentacao visual e artefatos cloud-ready. O pipeline original foi preservado:
 >
@@ -773,3 +795,73 @@ Esses arquivos incluem separacao por env vars, readiness/liveness probes e ponto
 - Executar Alembic como job de release antes da subida da API.
 - Adicionar OpenTelemetry tracing para medir latencia ponta a ponta por `event_id`.
 - Externalizar Postgres/Kafka/Redis para servicos gerenciados em producao.
+
+## Evolucao de seguranca, tenant e realtime
+
+Implementado:
+
+- Login JWT em `POST /auth/token` com roles `admin`, `analyst` e `viewer`.
+- RBAC em rotas operacionais: `PATCH /incidents/{id}` e `/demo/simulate-attack` exigem `admin` ou `analyst`.
+- Multi-tenant minimo via `tenant_id` propagado por simulador/coletor, rule engine, alert sink e API.
+- Isolamento tenant-aware nas consultas principais de alertas, incidentes, metricas e busca.
+- WebSocket opcional em `ws://localhost:5000/ws/alerts?token=<JWT>` com fallback do polling no frontend.
+- Endpoint de busca operacional: `GET /search?q=<termo>`.
+- Template `.env.example` com variaveis de seguranca e operacao.
+
+Comandos principais:
+
+```powershell
+docker compose up -d --build
+py -m pytest -q
+docker compose config
+curl -X POST http://localhost:5000/auth/token -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"sentinela\"}"
+curl "http://localhost:5000/search?q=BRUTE_FORCE" -H "Authorization: Bearer <JWT>"
+docker run --rm -i --network sentinela_sentinela-net -v ${PWD}/tests/load:/scripts grafana/k6 run /scripts/api_endpoints_stress.js
+k6 run tests/load/api_endpoints_stress.js
+```
+
+Documentacao detalhada: `docs/SECURITY_REALTIME_TENANCY.md`.
+
+## Observabilidade, tracing, busca e carga
+
+Novas capacidades opcionais:
+
+- Tracing OpenTelemetry na API com Jaeger em `http://localhost:16686`.
+- Kafka exporter para offsets e consumer lag.
+- OpenSearch opcional por perfil `search` e fallback automatico para Postgres.
+- Indexacao assíncrona de alertas pelo `alert_sink` quando `ENABLE_OPENSEARCH=true`.
+- Enrichment IOC local/mock para IP, dominio, URL e hash.
+- k6 cobrindo auth, search, metricas, incidentes, demo ingestion e WebSocket.
+
+Comandos de validacao:
+
+```powershell
+docker compose config
+docker compose up -d --build
+py -m pytest -q
+curl http://localhost:5000/metrics
+curl -X POST http://localhost:5000/auth/token -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"sentinela\"}"
+curl "http://localhost:5000/search?q=BRUTE_FORCE" -H "Authorization: Bearer <JWT>"
+k6 run tests/load/api_endpoints_stress.js
+```
+
+OpenSearch opcional:
+
+```powershell
+$env:ENABLE_OPENSEARCH="true"
+docker compose --profile search up -d --build opensearch alert_sink dashboard_api
+curl http://localhost:9200
+```
+
+Tracing opcional:
+
+```powershell
+$env:ENABLE_TRACING="true"
+docker compose up -d --build jaeger dashboard_api
+```
+
+Documentacao:
+
+- `docs/OBSERVABILITY_SEARCH.md`
+- `docs/TRACING.md`
+- `docs/LOAD_TESTING.md`

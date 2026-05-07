@@ -112,6 +112,9 @@ ALTER TABLE alertas ADD COLUMN IF NOT EXISTS action_reason TEXT;
 ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'simulation';
 ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed';
 ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_notes TEXT;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default';
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_alertas_ts ON alertas (ts DESC);
 CREATE INDEX IF NOT EXISTS idx_alertas_ip ON alertas (ip);
@@ -119,6 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_alertas_source_ip ON alertas (source_ip);
 CREATE INDEX IF NOT EXISTS idx_alertas_replay_id ON alertas (replay_id);
 CREATE INDEX IF NOT EXISTS idx_alertas_mitre_id ON alertas (mitre_id);
 CREATE INDEX IF NOT EXISTS idx_alertas_correlation_key ON alertas (correlation_key);
+CREATE INDEX IF NOT EXISTS idx_alertas_tenant_ts ON alertas (tenant_id, ts DESC);
 
 CREATE TABLE IF NOT EXISTS blacklist (
     ip TEXT PRIMARY KEY,
@@ -196,6 +200,8 @@ ALTER TABLE incidents ADD COLUMN IF NOT EXISTS response_playbook TEXT;
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS recommended_action TEXT;
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'simulation';
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed';
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default';
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 
 CREATE TABLE IF NOT EXISTS incident_alerts (
     id SERIAL PRIMARY KEY,
@@ -215,10 +221,31 @@ CREATE TABLE IF NOT EXISTS incident_audit_log (
     changed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    tenant_id TEXT DEFAULT 'default',
+    actor_user TEXT,
+    actor_role TEXT,
+    action TEXT NOT NULL,
+    resource_type TEXT,
+    resource_id TEXT,
+    correlation_id TEXT,
+    source_ip TEXT,
+    success BOOLEAN DEFAULT TRUE,
+    metadata_json JSONB DEFAULT '{}'::jsonb
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_incident_id ON incidents (incident_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_primary_source_ip ON incidents (primary_source_ip);
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents (status);
 CREATE INDEX IF NOT EXISTS idx_incidents_last_seen ON incidents (last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_incidents_tenant_last_seen ON incidents (tenant_id, last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_id ON incident_alerts (incident_id);
 CREATE INDEX IF NOT EXISTS idx_incident_alerts_alert_id ON incident_alerts (alert_id);
 CREATE INDEX IF NOT EXISTS idx_incident_audit_incident_id ON incident_audit_log (incident_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alertas_idempotency_key ON alertas (idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_idempotency_key ON incidents (idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_ts ON audit_logs (tenant_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs (resource_type);

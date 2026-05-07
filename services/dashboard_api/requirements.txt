@@ -3,3 +3,7 @@ psycopg2-binary
 flask-cors
 prometheus-client
 PyYAML
+flask-sock
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-flask
