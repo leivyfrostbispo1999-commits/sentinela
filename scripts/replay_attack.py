@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import uuid
+import yaml
 from datetime import datetime, timezone
 
 try:
@@ -12,135 +13,117 @@ except ImportError:
     print("Dependencia ausente: instale kafka-python ou execute dentro de ambiente com requirements do projeto.")
     sys.exit(1)
 
-
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
 DEFAULT_ATTACKER_IP = os.getenv("REPLAY_ATTACKER_IP", "203.0.113.45")
 SCENARIOS = {"brute_force", "port_scan", "ioc_match", "critical_chain", "false_positive", "multi_ip", "multi_ip_campaign"}
 
+def scenario_events(name, replay_id):
+    if name == "brute_force":
+        return [
+            build_event(replay_id, {"event_type": "FAILED_LOGIN", "username": "usuario"}, sequence=1),
+            build_event(replay_id, {"event_type": "FAILED_LOGIN", "username": "usuario"}, sequence=2),
+            build_event(replay_id, {"event_type": "FAILED_LOGIN", "username": "operador"}, sequence=3),
+            build_event(replay_id, {"event_type": "FAILED_LOGIN", "username": "admin"}, sequence=4),
+            build_event(replay_id, {"event_type": "BRUTE_FORCE", "username": "admin"}, sequence=5),
+        ]
+    if name == "port_scan":
+        return [
+            build_event(replay_id, {"event_type": "PORT_SCAN", "username": "scanner", "port": 22, "service": "ssh"}, sequence=1),
+            build_event(replay_id, {"event_type": "PORT_SCAN", "username": "scanner", "port": 80, "service": "http"}, sequence=2),
+            build_event(replay_id, {"event_type": "PORT_SCAN", "username": "scanner", "port": 443, "service": "https"}, sequence=3),
+            build_event(replay_id, {"event_type": "PORT_SCAN", "username": "scanner", "port": 5432, "service": "postgres"}, sequence=4),
+        ]
+    if name == "critical_chain":
+        return [
+            build_event(replay_id, {"event_type": "PORT_SCAN", "port": 22}, sequence=1),
+            build_event(replay_id, {"event_type": "PORT_SCAN", "port": 80}, sequence=2),
+            build_event(replay_id, {"event_type": "FAILED_LOGIN", "username": "usuario"}, sequence=3),
+            build_event(replay_id, {"event_type": "FAILED_LOGIN", "username": "admin"}, sequence=4),
+            build_event(replay_id, {"event_type": "BRUTE_FORCE", "username": "admin"}, sequence=5),
+            build_event(replay_id, {"event_type": "IOC_MATCH"}, sequence=6),
+            build_event(replay_id, {"event_type": "SUSPICIOUS"}, sequence=7),
+        ]
+    if name == "multi_ip_campaign":
+        return [
+            build_event(replay_id, {"event_type": "PORT_SCAN", "username": "scanner", "source_ip": "203.0.113.45", "destination_ip": "10.10.10.10"}, sequence=1),
+            build_event(replay_id, {"event_type": "FAILED_LOGIN", "username": "admin", "source_ip": "203.0.113.46", "destination_ip": "10.10.10.10"}, sequence=2),
+            build_event(replay_id, {"event_type": "BRUTE_FORCE", "username": "admin", "source_ip": "203.0.113.47", "destination_ip": "10.10.10.10"}, sequence=3),
+        ]
+    # Default fallback
+    return [
+        build_event(replay_id, {"event_type": "PORT_SCAN", "port": 22}, sequence=1),
+        build_event(replay_id, {"event_type": "FAILED_LOGIN", "username": "admin"}, sequence=2),
+        build_event(replay_id, {"event_type": "BRUTE_FORCE", "username": "admin"}, sequence=3),
+    ]
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
-
-def build_event(replay_id, event_type, username="usuario", port=22, service="ssh", sequence=0, ip=None, destination_ip="10.10.10.10"):
-    source_ip = ip or DEFAULT_ATTACKER_IP
+def build_event(replay_id, event_data, sequence=0):
     timestamp = now_iso()
+    source_ip = event_data.get("source_ip") or event_data.get("ip") or DEFAULT_ATTACKER_IP
     return {
         "event_id": str(uuid.uuid4()),
         "ip": source_ip,
         "source_ip": source_ip,
-        "event_type": event_type,
-        "username": username,
-        "port": port,
-        "service": service,
-        "destination_ip": destination_ip,
+        "event_type": event_data.get("event_type", "UNKNOWN"),
+        "username": event_data.get("username", "usuario"),
+        "port": event_data.get("port", 22),
+        "service": event_data.get("service", "ssh"),
+        "destination_ip": event_data.get("destination_ip", "10.10.10.10"),
         "timestamp": timestamp,
         "ts": timestamp,
         "is_replay_event": True,
         "replay_id": replay_id,
         "sequence": sequence,
+        "mitre_id": event_data.get("mitre_id"),
         "simulated_only": True,
     }
 
+def load_scenario(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        if path.endswith('.yml') or path.endswith('.yaml'):
+            return yaml.safe_load(f)
+        return json.load(f)
 
-def scenario_events(name, replay_id):
-    if name == "brute_force":
-        return [
-            build_event(replay_id, "FAILED_LOGIN", "usuario", sequence=1),
-            build_event(replay_id, "FAILED_LOGIN", "usuario", sequence=2),
-            build_event(replay_id, "FAILED_LOGIN", "operador", sequence=3),
-            build_event(replay_id, "FAILED_LOGIN", "admin", sequence=4),
-            build_event(replay_id, "BRUTE_FORCE", "admin", sequence=5),
-        ]
-    if name == "port_scan":
-        return [
-            build_event(replay_id, "PORT_SCAN", "scanner", port=22, service="ssh", sequence=1),
-            build_event(replay_id, "PORT_SCAN", "scanner", port=80, service="http", sequence=2),
-            build_event(replay_id, "PORT_SCAN", "scanner", port=443, service="https", sequence=3),
-            build_event(replay_id, "PORT_SCAN", "scanner", port=5432, service="postgres", sequence=4),
-        ]
-    if name == "ioc_match":
-        return [
-            build_event(replay_id, "HTTP_REQUEST", "web", port=80, service="http", sequence=1),
-            build_event(replay_id, "IOC_MATCH", "web", port=0, service="security", sequence=2),
-            build_event(replay_id, "SUSPICIOUS", "root", port=3389, service="rdp", sequence=3),
-        ]
-    if name == "false_positive":
-        return [
-            build_event(replay_id, "HTTP_REQUEST", "healthcheck", port=443, service="https", sequence=1, ip="198.51.100.23"),
-            build_event(replay_id, "HTTP_REQUEST", "healthcheck", port=443, service="https", sequence=2, ip="198.51.100.23"),
-        ]
-    if name == "multi_ip":
-        return [
-            build_event(replay_id, "PORT_SCAN", "scanner", port=22, service="ssh", sequence=1, ip="203.0.113.45"),
-            build_event(replay_id, "FAILED_LOGIN", "admin", port=22, service="ssh", sequence=2, ip="203.0.113.46"),
-            build_event(replay_id, "BRUTE_FORCE", "admin", port=22, service="ssh", sequence=3, ip="203.0.113.46"),
-            build_event(replay_id, "IOC_MATCH", "web", port=0, service="security", sequence=4, ip="203.0.113.47"),
-        ]
-    if name == "multi_ip_campaign":
-        return [
-            build_event(replay_id, "PORT_SCAN", "scanner", port=22, service="ssh", sequence=1, ip="203.0.113.45", destination_ip="10.10.10.10"),
-            build_event(replay_id, "FAILED_LOGIN", "admin", port=22, service="ssh", sequence=2, ip="203.0.113.46", destination_ip="10.10.10.10"),
-            build_event(replay_id, "FAILED_LOGIN", "admin", port=22, service="ssh", sequence=3, ip="203.0.113.47", destination_ip="10.10.10.10"),
-            build_event(replay_id, "BRUTE_FORCE", "admin", port=22, service="ssh", sequence=4, ip="203.0.113.48", destination_ip="10.10.10.10"),
-            build_event(replay_id, "IOC_MATCH", "admin", port=0, service="security", sequence=5, ip="203.0.113.46", destination_ip="10.10.10.10"),
-            build_event(replay_id, "ESCALATION", "admin", port=22, service="ssh", sequence=6, ip="203.0.113.47", destination_ip="10.10.10.10"),
-        ]
-    return [
-        build_event(replay_id, "PORT_SCAN", "scanner", port=22, service="ssh", sequence=1),
-        build_event(replay_id, "PORT_SCAN", "scanner", port=80, service="http", sequence=2),
-        build_event(replay_id, "FAILED_LOGIN", "usuario", sequence=3),
-        build_event(replay_id, "FAILED_LOGIN", "admin", sequence=4),
-        build_event(replay_id, "BRUTE_FORCE", "admin", sequence=5),
-        build_event(replay_id, "IOC_MATCH", "admin", port=0, service="security", sequence=6),
-        build_event(replay_id, "SUSPICIOUS", "root", port=3389, service="rdp", sequence=7),
-    ]
-
-
-def create_producer():
-    return KafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        value_serializer=lambda value: json.dumps(value, ensure_ascii=False).encode("utf-8"),
-    )
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Replay seguro de eventos simulados do SENTINELA 7.0.")
-    parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="critical_chain")
-    parser.add_argument("--delay", type=float, default=0.6, help="Intervalo entre eventos em segundos.")
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    replay_id = os.getenv("REPLAY_ID", f"replay-{args.scenario}-{uuid.uuid4().hex[:8]}")
-    sequence = scenario_events(args.scenario, replay_id)
-
-    print(f"SENTINELA 7.0 replay seguro iniciado | scenario={args.scenario} | replay_id={replay_id}")
-    print(f"Kafka={KAFKA_BOOTSTRAP_SERVERS} | topic={RAW_LOGS_TOPIC}")
-    print("Nenhum ataque real, rede externa, firewall ou bloqueio real sera executado.")
-
-    producer = create_producer()
-    for event in sequence:
+def run_replay(producer, events, scenario_name, delay=0.6):
+    replay_id = f"replay-{scenario_name}-{uuid.uuid4().hex[:8]}"
+    print(f"Iniciando replay: {scenario_name} (ID: {replay_id})")
+    
+    for i, event_data in enumerate(events):
+        event = build_event(replay_id, event_data, sequence=i+1)
         producer.send(RAW_LOGS_TOPIC, event)
         producer.flush(timeout=5)
-        print(json.dumps({
-            "sent": True,
-            "scenario": args.scenario,
-            "replay_id": event["replay_id"],
-            "source_ip": event["source_ip"],
-            "destination_ip": event["destination_ip"],
-            "event_type": event["event_type"],
-            "username": event["username"],
-            "port": event["port"],
-            "service": event["service"],
-            "sequence": event["sequence"],
-        }, ensure_ascii=False))
-        time.sleep(max(args.delay, 0))
+        print(f"Sent [{i+1}/{len(events)}]: {event['event_type']} from {event['source_ip']}")
+        time.sleep(delay)
 
-    print("Replay finalizado. Aguarde alguns segundos e confira o dashboard em modo DEMO.")
+def main():
+    parser = argparse.ArgumentParser(description="Replay Evoluído de Ataques para SENTINELA.")
+    parser.add_argument("--file", help="Caminho para arquivo YAML/JSON de cenário.")
+    parser.add_argument("--delay", type=float, default=0.5, help="Delay entre eventos.")
+    args = parser.parse_args()
 
+    producer = KafkaProducer(
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        value_serializer=lambda v: json.dumps(v).encode("utf-8")
+    )
+
+    if args.file:
+        scenario = load_scenario(args.file)
+        run_replay(producer, scenario['events'], scenario.get('name', 'file-replay'), args.delay)
+    else:
+        # Cenário Padrão: Multi-stage Attack Chain
+        default_events = [
+            {"event_type": "PORT_SCAN", "port": 22, "service": "ssh"},
+            {"event_type": "PORT_SCAN", "port": 80, "service": "http"},
+            {"event_type": "FAILED_LOGIN", "username": "admin"},
+            {"event_type": "FAILED_LOGIN", "username": "root"},
+            {"event_type": "BRUTE_FORCE", "username": "admin", "mitre_id": "T1110"},
+            {"event_type": "ESCALATION", "mitre_id": "T1068"},
+            {"event_type": "IOC_MATCH", "service": "security", "mitre_id": "T1071"}
+        ]
+        run_replay(producer, default_events, "multi-stage-chain", args.delay)
 
 if __name__ == "__main__":
     main()

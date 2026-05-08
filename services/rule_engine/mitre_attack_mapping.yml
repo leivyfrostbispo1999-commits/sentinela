@@ -1,0 +1,68 @@
+# Mapeamento MITRE ATT&CK para Sentinela SOC
+
+tactics:
+  - id: TA0001
+    name: Initial Access
+    description: The adversary is trying to get into your network.
+  - id: TA0007
+    name: Discovery
+    description: The adversary is trying to figure out your environment.
+  - id: TA0006
+    name: Credential Access
+    description: The adversary is trying to steal account names and passwords.
+  - id: TA0004
+    name: Privilege Escalation
+    description: The adversary is trying to gain higher-level permissions.
+  - id: TA0011
+    name: Command and Control
+    description: The adversary is trying to communicate with compromised systems to control them.
+
+techniques:
+  - id: T1110
+    name: Brute Force
+    tactic_id: TA0006
+    description: Adversaries may use brute force techniques to gain access to accounts.
+  - id: T1046
+    name: Network Service Discovery
+    tactic_id: TA0007
+    description: Adversaries may attempt to get a listing of services running on remote hosts.
+  - id: T1071
+    name: Application Layer Protocol
+    tactic_id: TA0011
+    description: Adversaries may communicate using application layer protocols to avoid detection.
+  - id: T1087
+    name: Account Discovery
+    tactic_id: TA0007
+    description: Adversaries may attempt to get a list of local system or domain accounts.
+  - id: T1068
+    name: Exploitation for Privilege Escalation
+    tactic_id: TA0004
+    description: Adversaries may exploit software vulnerabilities to elevate privileges.
+
+sub_techniques:
+  - id: T1110.001
+    name: Password Guessing
+    parent_id: T1110
+  - id: T1110.003
+    name: Password Spraying
+    parent_id: T1110
+
+detection_mapping:
+  FAILED_LOGIN:
+    technique_id: T1110
+    kill_chain_stage: Credential Access
+  BRUTE_FORCE:
+    technique_id: T1110
+    kill_chain_stage: Credential Access
+  PORT_SCAN:
+    technique_id: T1046
+    kill_chain_stage: Discovery
+  IOC_MATCH:
+    technique_id: T1071
+    kill_chain_stage: Command and Control
+  ESCALATION:
+    technique_id: T1068
+    kill_chain_stage: Privilege Escalation
+  SUSPICIOUS:
+    technique_id: T1087
+    kill_chain_stage: Discovery

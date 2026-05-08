@@ -654,7 +654,7 @@ def persist_incident_for_alert(conn, alert):
                 tenant_id,
                 primary_source_ip, source_ips, destination_ip, usernames, services,
                 event_types, mitre_techniques, correlation_reasons, replay_ids,
-                first_seen, last_seen, event_count, human_summary, soc_action, created_at, updated_at
+                first_seen, last_seen, event_count, human_summary, soc_action, created_at, updated_at, campaign_id
             )
             VALUES (
                 %(incident_id)s, %(title)s, %(description)s, %(status)s, %(severity)s, %(max_score)s,
@@ -663,7 +663,7 @@ def persist_incident_for_alert(conn, alert):
                 %(services)s::jsonb, %(event_types)s::jsonb, %(mitre_techniques)s::jsonb,
                 %(correlation_reasons)s::jsonb, %(replay_ids)s::jsonb,
                 COALESCE(%(first_seen)s::timestamptz, NOW()), COALESCE(%(last_seen)s::timestamptz, NOW()),
-                %(event_count)s, %(human_summary)s, %(soc_action)s, NOW(), NOW()
+                %(event_count)s, %(human_summary)s, %(soc_action)s, NOW(), NOW(), %(campaign_id)s
             )
             ON CONFLICT (incident_id) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -682,6 +682,7 @@ def persist_incident_for_alert(conn, alert):
                 event_count = incidents.event_count + 1,
                 human_summary = EXCLUDED.human_summary,
                 tenant_id = EXCLUDED.tenant_id,
+                campaign_id = COALESCE(incidents.campaign_id, EXCLUDED.campaign_id),
                 updated_at = NOW()
             """,
             {
@@ -797,7 +798,8 @@ def persist_alert(conn, alert):
                 target_user, target_service, target_port, target_container,
                 target_application, environment, asset_owner, asset_criticality,
                 business_impact, recommended_action, action_reason, execution_mode,
-                execution_status, execution_notes, tenant_id, correlation_id, idempotency_key
+                execution_status, execution_notes, tenant_id, correlation_id, idempotency_key,
+                enrichment_geoip, enrichment_threat, flink_context
             )
             VALUES (
                 %(event_id)s, %(ip)s, %(status)s, %(risco)s, %(score_final)s,
@@ -824,7 +826,8 @@ def persist_alert(conn, alert):
                 %(target_user)s, %(target_service)s, %(target_port)s, %(target_container)s,
                 %(target_application)s, %(environment)s, %(asset_owner)s, %(asset_criticality)s,
                 %(business_impact)s, %(recommended_action)s, %(action_reason)s, %(execution_mode)s,
-                %(execution_status)s, %(execution_notes)s, %(tenant_id)s, %(correlation_id)s, %(idempotency_key)s
+                %(execution_status)s, %(execution_notes)s, %(tenant_id)s, %(correlation_id)s, %(idempotency_key)s,
+                %(enrichment_geoip)s::jsonb, %(enrichment_threat)s::jsonb, %(flink_context)s::jsonb
             )
             ON CONFLICT (event_id) DO UPDATE SET
                 ip = EXCLUDED.ip,
@@ -847,6 +850,61 @@ def persist_alert(conn, alert):
                 replay_id = EXCLUDED.replay_id,
                 is_replay_event = EXCLUDED.is_replay_event,
                 service = EXCLUDED.service,
+                port = EXCLUDED.port,
+                event_type = EXCLUDED.event_type,
+                ip_event_count = EXCLUDED.ip_event_count,
+                risk_reasons = EXCLUDED.risk_reasons,
+                threat_intel_match = EXCLUDED.threat_intel_match,
+                threat_category = EXCLUDED.threat_category,
+                threat_description = EXCLUDED.threat_description,
+                threat_reputation_score = EXCLUDED.threat_reputation_score,
+                threat_source = EXCLUDED.threat_source,
+                correlation_window_seconds = EXCLUDED.correlation_window_seconds,
+                correlation_key = EXCLUDED.correlation_key,
+                correlation_reason = EXCLUDED.correlation_reason,
+                auto_response = EXCLUDED.auto_response,
+                action_soc = EXCLUDED.action_soc,
+                simulated_block = EXCLUDED.simulated_block,
+                is_demo = EXCLUDED.is_demo,
+                occurrence_count = EXCLUDED.occurrence_count,
+                first_seen = EXCLUDED.first_seen,
+                last_seen = EXCLUDED.last_seen,
+                aggregated = EXCLUDED.aggregated,
+                ports = EXCLUDED.ports,
+                services = EXCLUDED.services,
+                event_types = EXCLUDED.event_types,
+                raw_event = EXCLUDED.raw_event,
+                mitre_techniques = EXCLUDED.mitre_techniques,
+                internal_rule_id = EXCLUDED.internal_rule_id,
+                internal_rule_name = EXCLUDED.internal_rule_name,
+                correlation_rule = EXCLUDED.correlation_rule,
+                response_playbook = EXCLUDED.response_playbook,
+                detection_source = EXCLUDED.detection_source,
+                alert_type = EXCLUDED.alert_type,
+                score_breakdown = EXCLUDED.score_breakdown,
+                score_explanation = EXCLUDED.score_explanation,
+                target_host = EXCLUDED.target_host,
+                target_ip = EXCLUDED.target_ip,
+                target_user = EXCLUDED.target_user,
+                target_service = EXCLUDED.target_service,
+                target_port = EXCLUDED.target_port,
+                target_container = EXCLUDED.target_container,
+                target_application = EXCLUDED.target_application,
+                environment = EXCLUDED.environment,
+                asset_owner = EXCLUDED.asset_owner,
+                asset_criticality = EXCLUDED.asset_criticality,
+                business_impact = EXCLUDED.business_impact,
+                recommended_action = EXCLUDED.recommended_action,
+                action_reason = EXCLUDED.action_reason,
+                execution_mode = EXCLUDED.execution_mode,
+                execution_status = EXCLUDED.execution_status,
+                execution_notes = EXCLUDED.execution_notes,
+                tenant_id = EXCLUDED.tenant_id,
+                correlation_id = EXCLUDED.correlation_id,
+                idempotency_key = EXCLUDED.idempotency_key,
+                enrichment_geoip = EXCLUDED.enrichment_geoip,
+                enrichment_threat = EXCLUDED.enrichment_threat,
+                flink_context = EXCLUDED.flink_context,
                 port = EXCLUDED.port,
                 event_type = EXCLUDED.event_type,
                 ip_event_count = EXCLUDED.ip_event_count,
@@ -973,6 +1031,9 @@ def persist_alert(conn, alert):
                 "tenant_id": alert.get("tenant_id") or DEFAULT_TENANT_ID,
                 "correlation_id": alert.get("correlation_id") or event_id,
                 "idempotency_key": alert.get("idempotency_key") or idempotency_key_for_alert(alert),
+                "enrichment_geoip": json.dumps(alert.get("enrichment_geoip", {}), ensure_ascii=False),
+                "enrichment_threat": json.dumps(alert.get("enrichment_threat", {}), ensure_ascii=False),
+                "flink_context": json.dumps(alert.get("flink_context", {}), ensure_ascii=False),
             },
         )
 

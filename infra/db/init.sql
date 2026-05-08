@@ -221,6 +221,69 @@ CREATE TABLE IF NOT EXISTS incident_audit_log (
     changed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS enrichment_geoip JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS enrichment_threat JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS flink_context JSONB DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS response_actions (
+    id SERIAL PRIMARY KEY,
+    action_id UUID UNIQUE NOT NULL,
+    alert_id UUID NOT NULL,
+    type TEXT NOT NULL,
+    target TEXT,
+    reason TEXT,
+    mode TEXT DEFAULT 'simulated',
+    status TEXT DEFAULT 'executed',
+    timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    metadata_json JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_response_actions_alert_id ON response_actions (alert_id);
+CREATE INDEX IF NOT EXISTS idx_response_actions_type ON response_actions (type);
+CREATE INDEX IF NOT EXISTS idx_response_actions_ts ON response_actions (timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS tenants (
+    tenant_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    plan_id TEXT DEFAULT 'free',
+    api_key TEXT UNIQUE NOT NULL,
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS plans (
+    plan_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    max_eps INTEGER DEFAULT 10, -- Eventos por segundo
+    max_alerts_per_day INTEGER DEFAULT 100,
+    storage_retention_days INTEGER DEFAULT 7,
+    price_monthly NUMERIC(10, 2) DEFAULT 0.00
+);
+
+CREATE TABLE IF NOT EXISTS billing_records (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+    billing_period TEXT NOT NULL, -- Ex: 2026-05
+    event_count BIGINT DEFAULT 0,
+    amount NUMERIC(10, 2) DEFAULT 0.00,
+    status TEXT DEFAULT 'pending', -- pending, paid, overdue
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Inserir planos padrão
+INSERT INTO plans (plan_id, name, max_eps, max_alerts_per_day, storage_retention_days, price_monthly)
+VALUES 
+    ('free', 'Plano Gratuito', 5, 50, 7, 0.00),
+    ('pro', 'Plano Profissional', 100, 5000, 30, 499.00),
+    ('enterprise', 'Plano Enterprise', 5000, 1000000, 365, 4999.00)
+ON CONFLICT (plan_id) DO NOTHING;
+
+-- Inserir tenant default
+INSERT INTO tenants (tenant_id, name, plan_id, api_key, status)
+VALUES ('default', 'Sentinela Demo Client', 'enterprise', 'sentinela-demo-api-key', 'active')
+ON CONFLICT (tenant_id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS audit_logs (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -235,6 +298,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     success BOOLEAN DEFAULT TRUE,
     metadata_json JSONB DEFAULT '{}'::jsonb
 );
+
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS campaign_id TEXT;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS campaign_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_alertas_campaign_id ON alertas (campaign_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_campaign_id ON incidents (campaign_id);
 
 CREATE INDEX IF NOT EXISTS idx_incidents_incident_id ON incidents (incident_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_primary_source_ip ON incidents (primary_source_ip);

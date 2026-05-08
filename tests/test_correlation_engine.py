@@ -47,8 +47,8 @@ def test_correlation_tactical_progression():
     # Validações da Kill Chain
     kill_chain = correlation.get("kill_chain")
     assert kill_chain is not None
-    assert kill_chain["highest_phase"] == 2
-    assert kill_chain["current_phase"] == 2
+    assert kill_chain["highest_phase"] == 4 # BRUTE_FORCE e agora Credential Access (Fase 4)
+    assert kill_chain["current_phase"] == 4 # BRUTE_FORCE e agora Credential Access (Fase 4)
     assert kill_chain["current_tactic"] == "Credential Access"
     assert len(kill_chain["path"]) == 1
     assert kill_chain["path"][0]["tactic"] == "Discovery"

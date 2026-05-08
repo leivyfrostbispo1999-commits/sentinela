@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinela-db
+  namespace: sentinela
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sentinela-db
+  template:
+    metadata:
+      labels:
+        app: sentinela-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_PASSWORD
+          value: "root"
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinela-db
+  namespace: sentinela
+spec:
+  ports:
+  - port: 5432
+  selector:
+    app: sentinela-db

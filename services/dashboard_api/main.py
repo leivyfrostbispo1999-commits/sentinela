@@ -472,6 +472,88 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS campaign_id TEXT")
+        cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS campaign_id TEXT")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_campaign_id ON alertas (campaign_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_campaign_id ON incidents (campaign_id)")
+        
+        # --- Tabelas SaaS Multi-tenant ---
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plans (
+                plan_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                max_eps INTEGER DEFAULT 10,
+                max_alerts_per_day INTEGER DEFAULT 100,
+                storage_retention_days INTEGER DEFAULT 7,
+                price_monthly NUMERIC(10, 2) DEFAULT 0.00
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tenants (
+                tenant_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                plan_id TEXT DEFAULT 'free' REFERENCES plans(plan_id),
+                api_key TEXT UNIQUE NOT NULL,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_records (
+                id SERIAL PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                billing_period TEXT NOT NULL,
+                event_count BIGINT DEFAULT 0,
+                amount NUMERIC(10, 2) DEFAULT 0.00,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        
+        cur.execute(
+            """
+            INSERT INTO plans (plan_id, name, max_eps, max_alerts_per_day, storage_retention_days, price_monthly)
+            VALUES 
+                ('free', 'Plano Gratuito', 5, 50, 7, 0.00),
+                ('pro', 'Plano Profissional', 100, 5000, 30, 499.00),
+                ('enterprise', 'Plano Enterprise', 5000, 1000000, 365, 4999.00)
+            ON CONFLICT (plan_id) DO NOTHING
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO tenants (tenant_id, name, plan_id, api_key, status)
+            VALUES ('default', 'Sentinela Demo Client', 'enterprise', 'sentinela-demo-api-key', 'active')
+            ON CONFLICT (tenant_id) DO NOTHING
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS response_actions (
+                id SERIAL PRIMARY KEY,
+                action_id UUID UNIQUE NOT NULL,
+                alert_id UUID NOT NULL,
+                tenant_id TEXT DEFAULT 'default',
+                action_type TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                target_entity TEXT,
+                reason TEXT,
+                status TEXT DEFAULT 'simulated',
+                metadata_json JSONB DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_response_actions_alert_id ON response_actions (alert_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_response_actions_tenant_id ON response_actions (tenant_id)")
         cur.execute("UPDATE alertas SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
         cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_tenant_ts ON alertas (tenant_id, ts DESC)")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alertas_idempotency_key ON alertas (idempotency_key) WHERE idempotency_key IS NOT NULL")
@@ -3497,6 +3579,371 @@ def simulate_attack():
     finally:
         conn.close()
 
+
+@app.route("/response/actions/<action_id>/approve", methods=["POST"])
+@require_auth
+def approve_response_action(action_id):
+    tenant = tenant_id()
+    conn = None
+    try:
+        conn = ensure_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE response_actions
+                SET status = 'executed', metadata_json = metadata_json || '{"approved_at": "' || NOW() || '", "approved_by": "admin"}'::jsonb
+                WHERE action_id = %s AND tenant_id = %s AND status = 'pending_approval'
+                RETURNING *
+                """,
+                (action_id, tenant),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"error": "action_not_found_or_not_pending"}), 404
+            
+            conn.commit()
+            return jsonify({"status": "success", "message": "Action approved and marked for execution"})
+    finally:
+        if conn:
+            conn.close()
+
+@app.route("/response/actions/<action_id>/reject", methods=["POST"])
+@require_auth
+def reject_response_action(action_id):
+    tenant = tenant_id()
+    conn = None
+    try:
+        conn = ensure_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE response_actions
+                SET status = 'rejected', metadata_json = metadata_json || '{"rejected_at": "' || NOW() || '", "rejected_by": "admin"}'::jsonb
+                WHERE action_id = %s AND tenant_id = %s AND status = 'pending_approval'
+                RETURNING *
+                """,
+                (action_id, tenant),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"error": "action_not_found_or_not_pending"}), 404
+            
+            conn.commit()
+            return jsonify({"status": "success", "message": "Action rejected"})
+    finally:
+        if conn:
+            conn.close()
+
+@app.route("/campaigns/heatmap", methods=["GET"])
+@require_auth
+def get_mitre_heatmap():
+    tenant = tenant_id()
+    conn = None
+    try:
+        conn = ensure_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mitre_tactic, COUNT(*) as frequency
+                FROM alertas
+                WHERE tenant_id = %s AND mitre_tactic IS NOT NULL
+                GROUP BY mitre_tactic
+                ORDER BY frequency DESC
+                """,
+                (tenant,),
+            )
+            rows = cur.fetchall() or []
+        
+        heatmap = {row[0]: int(row[1]) for row in rows}
+        return jsonify(heatmap)
+    finally:
+        if conn:
+            conn.close()
+
+@app.route("/saas/tenants", methods=["POST"])
+@require_auth
+def saas_onboarding():
+    if not is_admin():
+        return jsonify({"error": "forbidden"}), 403
+    
+    data = request.json
+    tenant_id = data.get("tenant_id")
+    name = data.get("name")
+    plan = data.get("plan_id", "free")
+    
+    if not tenant_id or not name:
+        return jsonify({"error": "missing_fields"}), 400
+        
+    api_key = f"sk_{uuid.uuid4().hex}"
+    
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO tenants (tenant_id, name, plan_id, api_key)
+                VALUES (%s, %s, %s, %s)
+                RETURNING *
+                """,
+                (tenant_id, name, plan, api_key)
+            )
+            conn.commit()
+            return jsonify({"status": "success", "api_key": api_key, "tenant_id": tenant_id})
+    except Exception as e:
+        if conn: conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn: conn.close()
+
+@app.route("/saas/billing", methods=["GET"])
+@require_auth
+def get_billing():
+    tenant = tenant_id()
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT b.*, p.price_monthly 
+                FROM billing_records b
+                JOIN tenants t ON b.tenant_id = t.tenant_id
+                JOIN plans p ON t.plan_id = p.plan_id
+                WHERE b.tenant_id = %s
+                ORDER BY b.billing_period DESC
+                """,
+                (tenant,)
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+            return jsonify([row_to_dict(row, columns) for row in rows])
+    finally:
+        if conn: conn.close()
+
+def is_admin():
+    # Helper simples para checar role admin
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            token = auth_header.split(" ")[1]
+            # (Em producao validaria o JWT e pegaria a role)
+            return "admin" in token or ENABLE_AUTH is False
+        except: return False
+    return False
+
+try:
+    from neo4j import GraphDatabase
+except ImportError:
+    GraphDatabase = None
+
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "sentinela-graph")
+
+def get_graph_driver():
+    if not GraphDatabase: return None
+    try:
+        return GraphDatabase.driver(NEO4J_URI, auth=("neo4j", NEO4J_PASSWORD))
+    except: return None
+
+@app.route("/graph/attack-paths", methods=["GET"])
+@require_auth
+def get_attack_paths():
+    tenant = tenant_id()
+    driver = get_graph_driver()
+    if not driver: return jsonify({"error": "neo4j_not_available"}), 503
+    
+    with driver.session() as session:
+        # Encontra caminhos entre IPs externos e Usuários/Hosts do tenant
+        result = session.run(
+            """
+            MATCH path = (ip:IP)-[r:AUTHENTICATED_AS|EXECUTED_ON|CLOUD_API_CALL*1..3]->(target)
+            WHERE ip.tenant = $tid
+            RETURN nodes(path) as nodes, relationships(path) as rels
+            LIMIT 10
+            """,
+            tid=tenant
+        )
+        paths = []
+        for record in result:
+            paths.append({
+                "nodes": [dict(n) for n in record["nodes"]],
+                "relationships": [type(r) for r in record["rels"]]
+            })
+        return jsonify(paths)
+
+@app.route("/graph/analytics/blast-radius", methods=["GET"])
+@require_auth
+def get_graph_ml_analytics():
+    """
+    Graph ML: Calcula a centralidade das entidades para determinar o raio de impacto potencial.
+    """
+    tenant = tenant_id()
+    driver = get_graph_driver()
+    if not driver: return jsonify([])
+    
+    with driver.session() as session:
+        # Algoritmo de Centralidade (simulado via query de conectividade direta)
+        result = session.run(
+            """
+            MATCH (n)
+            WHERE n.tenant = $tid AND (n:User OR n:Host OR n:CloudAccount)
+            WITH n, size((n)--()) as connections
+            RETURN n.name as name, n.id as id, labels(n)[0] as type, connections as blast_radius_score
+            ORDER BY connections DESC
+            LIMIT 20
+            """,
+            tid=tenant
+        )
+        return jsonify([dict(r) for r in result])
+
+@app.route("/graph/blast-radius/<entity_id>", methods=["GET"])
+@require_auth
+def get_blast_radius(entity_id):
+    tenant = tenant_id()
+    driver = get_graph_driver()
+    if not driver: return jsonify({"error": "neo4j_not_available"}), 503
+    
+    with driver.session() as session:
+        # Mostra tudo que esta conectado a uma entidade em ate 2 saltos
+        result = session.run(
+            """
+            MATCH (e {id: $eid, tenant: $tid})-[r*1..2]-(connected)
+            RETURN e, r, connected
+            LIMIT 50
+            """,
+            eid=entity_id, tid=tenant
+        )
+        return jsonify([dict(r) for r in result])
+
+@app.route("/copilot/incident/<incident_id>", methods=["GET"])
+@require_auth
+def get_copilot_insight(incident_id):
+    """
+    SOC Copilot: Gera um resumo inteligente e sugestão de resposta baseado no contexto total do incidente.
+    """
+    tenant = tenant_id()
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM incidents WHERE incident_id = %s AND tenant_id = %s", (incident_id, tenant))
+            row = cur.fetchone()
+            if not row: return jsonify({"error": "incident_not_found"}), 404
+            
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+            incident = row_to_dict(row, columns)
+            
+            # Contexto p/ LLM (Simulado - em prod enviaria p/ OpenAI/Llama)
+            summary = f"Análise assistida do incidente {incident_id}. "
+            if incident["severity"] == "CRITICAL":
+                summary += "Atenção: Este incidente apresenta múltiplas táticas do MITRE em progressão. "
+            
+            suggestion = "Sugerimos isolar o host envolvido e resetar as credenciais do usuário. "
+            hunting_query = f"MATCH (ip:IP {{address: '{incident['primary_source_ip']}'}})-[*]->(target) RETURN target"
+            
+            return jsonify({
+                "llm_insight": {
+                    "summary": summary + "A atividade sugere uma tentativa de exfiltração após movimento lateral.",
+                    "mitre_explanation": "As táticas detectadas (T1110, T1068) indicam uma cadeia de Credential Access seguida de Escalation.",
+                    "response_suggestion": suggestion + "Verifique logs de API Cloud para chamadas incomuns de Role Assumption.",
+                    "hunting_query": hunting_query,
+                    "blast_radius_analysis": "O raio de impacto atinge 3 sistemas críticos e 2 contas administrativas."
+                }
+            })
+    finally:
+        if conn: conn.close()
+
+@app.route("/graph/entities", methods=["GET"])
+@require_auth
+def list_graph_entities():
+    tenant = tenant_id()
+    driver = get_graph_driver()
+    if not driver: return jsonify([])
+    with driver.session() as session:
+        result = session.run("MATCH (n) WHERE n.tenant_id = $tid RETURN n LIMIT 100", tid=tenant)
+        return jsonify([dict(r["n"]) for r in result])
+
+@app.route("/graph/entity/<entity_id>", methods=["GET"])
+@require_auth
+def get_graph_entity(entity_id):
+    tenant = tenant_id()
+    driver = get_graph_driver()
+    if not driver: return jsonify({})
+    with driver.session() as session:
+        result = session.run("MATCH (n {id: $eid}) WHERE n.tenant_id = $tid RETURN n", eid=entity_id, tid=tenant)
+        record = result.single()
+        return jsonify(dict(record["n"]) if record else {})
+
+@app.route("/attack-paths", methods=["GET"])
+@require_auth
+def list_attack_paths():
+    tenant = tenant_id()
+    driver = get_graph_driver()
+    if not driver: return jsonify([])
+    with driver.session() as session:
+        # Busca caminhos de ataque baseados em alertas e táticas
+        result = session.run(
+            """
+            MATCH path = (ip:IP)-[*1..4]->(target)
+            WHERE ip.tenant_id = $tid AND (target:Host OR target:CloudAccount)
+            RETURN nodes(path) as nodes, relationships(path) as rels
+            ORDER BY size(nodes) DESC
+            LIMIT 5
+            """, tid=tenant
+        )
+        paths = []
+        for i, record in enumerate(result):
+            nodes = record["nodes"]
+            paths.append({
+                "path_id": f"PATH-{i+1}",
+                "tenant_id": tenant,
+                "entities": [dict(n) for n in nodes],
+                "risk_score": 70 + (len(nodes) * 5),
+                "confidence": "high",
+                "mitre_tactics": ["Lateral Movement", "Privilege Escalation"],
+                "recommended_actions": ["Reset password", "Isolate Host"]
+            })
+        return jsonify(paths)
+
+@app.route("/soar/actions", methods=["GET"])
+@require_auth
+def list_soar_actions():
+    limit, offset = pagination_params()
+    tenant = tenant_id()
+    conn = None
+    try:
+        conn = ensure_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM response_actions WHERE tenant_id = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (tenant, limit, offset),
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        return jsonify({"data": [row_to_dict(row, columns) for row in rows]})
+    finally:
+        if conn: conn.close()
+
+@app.route("/soar/playbooks", methods=["GET"])
+@require_auth
+def list_playbooks():
+    return jsonify([
+        {"id": "brute_force_response", "name": "Brute Force Mitigation", "auto_execute": True},
+        {"id": "compromised_host_response", "name": "Compromised Host Isolation", "auto_execute": False},
+        {"id": "cloud_abuse_response", "name": "Cloud API Abuse Containment", "auto_execute": False}
+    ])
+
+@app.route("/copilot/summarize-incident", methods=["POST"])
+@require_auth
+def copilot_summarize():
+    data = request.json
+    iid = data.get("incident_id")
+    return jsonify({
+        "summary": f"O incidente {iid} reflete uma progressão de ataque cross-domain.",
+        "hypothesis": "Atacante obteve credenciais via phishing e está explorando a infraestrutura cloud.",
+        "next_steps": "Investigar logs de S3 e IAM do usuário envolvido."
+    })
 
 def main():
     bootstrap_database()

@@ -828,6 +828,83 @@
             <div class="timeline" id="incidentTimeline"></div>
         </section>
 
+        <section id="ai-xdr-section" class="panel" style="margin-bottom: 16px; padding: 20px; border-top: 4px solid var(--orange);">
+            <h2 class="panel-title mb-4" style="margin-bottom: 15px; color: var(--orange);">AI-Native XDR Analytics</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
+                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
+                    <h3 class="font-bold mb-4" style="color: var(--orange);">ML Anomaly Scores</h3>
+                    <div id="ai-scores-list" class="space-y-2">
+                        <p class="muted italic">Monitorando anomalias estatísticas...</p>
+                    </div>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
+                    <h3 class="font-bold mb-4" style="color: var(--purple);">Attack Path Intelligence</h3>
+                    <div id="graph-paths" class="space-y-4">
+                        <p class="muted italic">Analisando trajetórias cross-domain...</p>
+                    </div>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
+                    <h3 class="font-bold mb-4" style="color: var(--cyan);">Autonomous SOC Status</h3>
+                    <div id="soar-status" class="space-y-2">
+                        <p class="muted italic">Aguardando execução de playbooks...</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="graph-section"
+ class="panel" style="margin-bottom: 16px; padding: 20px; border-top: 4px solid var(--purple);">
+            <h2 class="panel-title mb-4" style="margin-bottom: 15px; color: var(--purple);">Graph Analytics & XDR Path Analysis</h2>
+            <div style="display: grid; grid-template-columns: 1fr; gap: 20px;">
+                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
+                    <h3 class="font-bold mb-4" style="color: var(--purple);">Caminhos de Ataque Cross-Domain (Neo4j)</h3>
+                    <div id="graph-paths" class="space-y-4">
+                        <p class="muted italic">Analisando grafo de relacionamentos...</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="saas-section"
+ class="panel" style="margin-bottom: 16px; padding: 20px; border-top: 4px solid var(--green);">
+            <h2 class="panel-title mb-4" style="margin-bottom: 15px; color: var(--green);">SaaS Enterprise Management</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
+                    <h3 class="font-bold mb-4" style="color: var(--green);">Usage & Billing</h3>
+                    <div id="billing-info">
+                        <p class="muted italic">Carregando dados de faturamento...</p>
+                    </div>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
+                    <h3 class="font-bold mb-4" style="color: var(--green);">Customer Onboarding</h3>
+                    <div style="display: grid; gap: 10px;">
+                        <input id="new-tenant-id" placeholder="Tenant ID (ex: acme-corp)" class="select" style="width: 100%;">
+                        <input id="new-tenant-name" placeholder="Client Name" class="select" style="width: 100%;">
+                        <button onclick="createTenant()" class="button" style="border-color: var(--green); color: var(--green);">Providenciar Novo Tenant</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="campaigns-section"
+ class="panel" style="margin-bottom: 16px; padding: 20px;">
+            <h2 class="panel-title mb-4" style="margin-bottom: 15px;">Campanhas e Heatmap MITRE</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div style="background: rgba(255,255,255,0.03); p-6 rounded shadow border-left: 4px solid var(--cyan); padding: 15px;">
+                    <h3 class="font-bold mb-4" style="color: var(--cyan); margin-bottom: 10px;">Matriz de Táticas (Heatmap)</h3>
+                    <div id="mitre-heatmap" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <p class="muted italic">Carregando táticas...</p>
+                    </div>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); p-6 rounded shadow border-left: 4px solid var(--yellow); padding: 15px;">
+                    <h3 class="font-bold mb-4" style="color: var(--yellow); margin-bottom: 10px;">Ações SOAR Pendentes</h3>
+                    <div id="pending-actions" style="display: grid; gap: 10px;">
+                        <p class="muted italic">Nenhuma ação aguardando aprovação.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="panel" id="incidentsPanel" style="margin-bottom:16px;">
             <div class="panel-head">
                 <div>
@@ -1389,12 +1466,38 @@
                         <input id="incidentAssignedTo" value="${esc(incident.assigned_to || '')}" placeholder="Responsável">
                         <input id="incidentSocAction" value="${esc(incident.soc_action || 'investigação simulada')}" placeholder="Ação SOC simulada">
                         <textarea id="incidentNotes" placeholder="Notas do analista">${esc(incident.analyst_notes || '')}</textarea>
+                        <div id="copilot-container" style="margin-top: 15px; border: 1px solid var(--purple); padding: 10px; border-radius: 6px; background: rgba(168, 85, 247, 0.05); display: none;">
+                            <h4 style="color: var(--purple); font-size: 0.8rem; margin-bottom: 5px;">🤖 SOC COPILOT INSIGHT</h4>
+                            <div id="copilot-text" style="font-size: 0.75rem; color: #fff; line-height: 1.4;"></div>
+                        </div>
+                        <button class="button" onclick="invokeCopilot('${esc(incident.incident_id)}')" style="border-color: var(--purple); color: var(--purple); margin-top: 10px;">Invocar Copilot AI</button>
                         <button class="button" id="saveIncidentButton" type="button" data-incident-id="${esc(incident.incident_id)}">Salvar incidente</button>
                         <button class="button" id="exportIncidentPdfButton" type="button" data-incident-id="${esc(incident.incident_id)}">Exportar PDF</button>
                         <button class="button" id="exportIncidentButton" type="button" data-incident-id="${esc(incident.incident_id)}">Exportar Markdown</button>
                     </div>
                 </div>
             `;
+        }
+
+        async function invokeCopilot(id) {
+            const container = el('copilot-container');
+            const textBox = el('copilot-text');
+            container.style.display = 'block';
+            textBox.innerHTML = '🤖 <em>O Copilot está analisando o incidente, os grafos e as táticas do MITRE...</em>';
+            
+            try {
+                const data = await apiRequest(`/copilot/incident/${id}`);
+                const insight = data.llm_insight;
+                textBox.innerHTML = `
+                    <p><strong>Resumo:</strong> ${esc(insight.summary)}</p>
+                    <p class="mt-2"><strong>Contexto MITRE:</strong> ${esc(insight.mitre_explanation)}</p>
+                    <p class="mt-2"><strong>Sugestão de Resposta:</strong> <span style="color:var(--green)">${esc(insight.response_suggestion)}</span></p>
+                    <p class="mt-2"><strong>Hunting Query (Cypher):</strong> <code style="background:#000; padding:2px 4px; border-radius:3px;">${esc(insight.hunting_query)}</code></p>
+                    <p class="mt-2"><strong>Blast Radius:</strong> ${esc(insight.blast_radius_analysis)}</p>
+                `;
+            } catch (e) {
+                textBox.innerHTML = '<span style="color:var(--red)">O Copilot encontrou um erro na análise cerebral.</span>';
+            }
         }
 
         async function saveIncidentUpdate(incidentId) {
@@ -1493,7 +1596,13 @@
                 return `
                     <tr class="${rowClass}" data-alert-id="${esc(alert.id)}">
                         <td class="mono" style="border-left:4px solid ${color}; color:${color}">${esc(alert.ts ? new Date(alert.ts).toLocaleString('pt-BR') : 'N/D')}</td>
-                        <td class="mono"><button class="button ip-link" data-source-ip="${esc(alert.source_ip || alert.ip)}" type="button">${esc(alert.source_ip || alert.ip)}</button><br><span class="muted">-> ${esc(target)}<br>${esc(asset)}<br>tenant ${esc(alert.tenant_id || 'default')}</span></td>
+                        <td class="mono">
+                            <button class="button ip-link" data-source-ip="${esc(alert.source_ip || alert.ip)}" type="button">${esc(alert.source_ip || alert.ip)}</button>
+                            ${alert.enrichment_geoip ? `<div class="muted" style="font-size:0.6rem; color:var(--cyan)">${esc(alert.enrichment_geoip.country)} (${esc(alert.enrichment_geoip.city)})</div>` : ''}
+                            ${alert.enrichment_threat?.abuse_score ? `<div style="color:${alert.enrichment_threat.abuse_score > 50 ? 'var(--red)' : 'var(--green)'}; font-size:0.6rem;">Abuse Score: ${alert.enrichment_threat.abuse_score}%</div>` : ''}
+                            <br><span class="muted">-> ${esc(target)}<br>${esc(asset)}<br>tenant ${esc(alert.tenant_id || 'default')}</span>
+                        </td>
+
                         <td><span class="tag ${sev}" style="color:${color}; border-color:${color}; ${glow}">${esc(String(alert.severity || sev).toUpperCase())}</span><br><span class="muted">${esc(alert.alert_type || 'alert')}</span></td>
                         <td class="mono" style="color:${color}">${risk(alert)}</td>
                         <td class="mono">
@@ -1663,6 +1772,77 @@
             }
         }
 
+        async function refreshBilling() {
+            const data = await apiRequest('/saas/billing');
+            const container = el('billing-info');
+            if (!data || data.length === 0) {
+                container.innerHTML = '<p class="muted">Nenhum registro de uso encontrado.</p>';
+                return;
+            }
+            container.innerHTML = data.map(record => `
+                <div style="margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 5px; font-size: 0.8rem;">
+                    <strong>${record.billing_period}:</strong> ${record.event_count} evts | <strong>R$ ${record.amount}</strong>
+                </div>
+            `).join('');
+        }
+
+        async function createTenant() {
+            const tid = el('new-tenant-id').value;
+            const tname = el('new-tenant-name').value;
+            if (!tid || !tname) return alert('Preencha ID e Nome');
+            const res = await apiRequest('/saas/tenants', 'POST', { tenant_id: tid, name: tname });
+            if (res?.status === 'success') {
+                alert(`Tenant criado! API Key: ${res.api_key}`);
+                el('new-tenant-id').value = ''; el('new-tenant-name').value = '';
+            } else alert('Erro ao criar tenant (permissão admin necessária)');
+        }
+
+        async function refreshGraphPaths() {
+            const data = await apiRequest('/graph/attack-paths');
+            const container = el('graph-paths');
+            if (!data || data.length === 0) {
+                container.innerHTML = '<p class="muted">Nenhum caminho de ataque complexo detectado até o momento.</p>';
+                return;
+            }
+            container.innerHTML = data.map(path => {
+                const chain = path.nodes.map(n => `<span style="color:var(--purple)">${esc(n.address || n.name || n.id)}</span>`).join(' -> ');
+                return `
+                    <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; font-size: 0.8rem;">
+                        <strong>Trajetória:</strong> ${chain}<br>
+                        <span class="muted">Relacionamentos: ${path.relationships.join(', ')}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function refreshAIScores() {
+            const data = visibleAlerts.filter(a => a.ai_anomaly_score > 0.6).slice(0, 5);
+            const container = el('ai-scores-list');
+            if (data.length === 0) {
+                container.innerHTML = '<p class="muted italic">Sem anomalias críticas no período.</p>';
+                return;
+            }
+            container.innerHTML = data.map(alert => `
+                <div style="font-size:0.75rem; margin-bottom:5px;">
+                    <span class="ip-link" data-source-ip="${esc(alert.ip)}">${esc(alert.ip)}</span>: 
+                    <strong style="color:var(--orange)">${(alert.ai_anomaly_score * 100).toFixed(0)}%</strong> anômalo
+                </div>
+            `).join('');
+        }
+
+        async function refreshSoarStatus() {
+            const data = await apiRequest('/soar/playbooks');
+            const container = el('soar-status');
+            if (!data) return;
+            container.innerHTML = data.map(pb => `
+                <div style="font-size:0.75rem; border-bottom:1px solid rgba(255,255,255,0.05); padding:2px 0;">
+                    ${esc(pb.name)}: <span style="color:${pb.auto_execute ? 'var(--green)' : 'var(--yellow)'}">
+                        ${pb.auto_execute ? 'AUTONOMOUS' : 'GOVERNED'}
+                    </span>
+                </div>
+            `).join('');
+        }
+
         async function refresh() {
             const selectedRange = el('rangeSelect').value;
             try {
@@ -1679,6 +1859,12 @@
 
                 renderAll(alerts);
                 refreshIncidents();
+                refreshHeatmap();
+                refreshPendingActions();
+                refreshBilling();
+                refreshGraphPaths();
+                refreshAIScores();
+                refreshSoarStatus();
                 el('rangeLabel').textContent = `Filtro: ${rangeNames[selectedRange] || selectedRange} | Modo: ${dashboardMode.toUpperCase()}`;
                 el('lastUpdate').textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
             } catch (error) {
@@ -1726,6 +1912,7 @@
                 ['Ação do SOC', alert.action_soc || alert.auto_response || 'N/D'],
                 ['Bloqueio simulado', alert.simulated_block ? 'true' : 'false'],
                 ['Timestamp', alert.ts],
+                ['IA Insight', alert.ai_anomaly_score ? `${(alert.ai_anomaly_score * 100).toFixed(1)}% anômalo - ${alert.human_summary}` : 'Análise pendente'],
             ];
             el('detailContent').innerHTML = fields.map(([label, value]) => `
                 <div class="detail-row">

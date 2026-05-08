@@ -218,35 +218,64 @@ def simulate_normal_traffic(producer):
     send_event(producer, ip, event_type, port, scenario="normal")
 
 
+def simulate_endpoint_telemetry(producer, ip):
+    target_host = random.choice(["prod-server-01", "dev-workstation-12", "k8s-node-main"])
+    process_name = random.choice(["bash", "curl", "powershell.exe", "apt", "python3", "whoami"])
+    parent_process = random.choice(["sshd", "systemd", "explorer.exe"])
+    
+    # Simula Process Creation (eBPF style)
+    event_type = random.choice(["ENDPOINT_PROCESS_START", "SHELL_SPAWN", "CREDENTIAL_ACCESS"])
+    cmd = f"/usr/bin/{process_name} -c 'malicious_script.sh'" if event_type != "CREDENTIAL_ACCESS" else "mimikatz.exe"
+    
+    send_event(producer, ip, event_type, 0, scenario="xdr_endpoint", 
+               target_host=target_host, process_name=process_name, parent_process=parent_process,
+               pid=random.randint(1000, 65000), command_line=cmd)
+
+def simulate_cloud_telemetry(producer, ip):
+    account_id = "123456789012"
+    api_call = random.choice(["DescribeInstances", "ListS3Buckets", "AssumeRole", "CreateUser", "DeleteLogGroup", "DeleteTrail"])
+    
+    event_type = "CLOUD_API_CALL" if "Delete" not in api_call else "CLOUD_API_ABUSE"
+    
+    # Simula CloudTrail Event
+    send_event(producer, ip, event_type, 443, scenario="xdr_cloud",
+               cloud_provider="AWS", cloud_account=account_id, aws_region="us-east-1",
+               api_call=api_call, user_agent="Boto3/1.26.0 Python/3.10", access_key_id="AKIA...SIM")
+
+def simulate_privilege_escalation(producer, ip):
+    target_host = "db-server-secure"
+    send_event(producer, ip, "PRIVILEGE_ESCALATION", 0, scenario="xdr_identity",
+               target_host=target_host, username="root", method="sudo_exploit")
+
 def run():
     start_ops_server()
     producer = create_producer()
-    log_json("INFO", "SENTINELA simulator started")
+    log_json("INFO", "SENTINELA simulator started with AI-native XDR capabilities")
 
     while True:
         try:
             scenario = random.random()
 
-            if scenario < 0.25:
+            if scenario < 0.15:
                 simulate_normal_traffic(producer)
-            elif scenario < 0.38:
+            elif scenario < 0.25:
                 simulate_brute_force(producer, random.choice(PERSISTENT_ATTACKERS))
-            elif scenario < 0.50:
+            elif scenario < 0.35:
                 simulate_port_scan(producer, random.choice(PERSISTENT_ATTACKERS))
-            elif scenario < 0.62:
-                simulate_beaconing(producer, random.choice(THREAT_INTEL_IPS))
-            elif scenario < 0.72:
+            elif scenario < 0.50:
+                simulate_endpoint_telemetry(producer, random.choice(PERSISTENT_ATTACKERS))
+            elif scenario < 0.65:
+                simulate_cloud_telemetry(producer, random.choice(PERSISTENT_ATTACKERS))
+            elif scenario < 0.75:
+                simulate_privilege_escalation(producer, random.choice(PERSISTENT_ATTACKERS))
+            elif scenario < 0.85:
                 simulate_lateral_movement(producer, random.choice(PERSISTENT_ATTACKERS))
-            elif scenario < 0.82:
+            elif scenario < 0.92:
                 simulate_login_anomaly(producer, random.choice(PERSISTENT_ATTACKERS + THREAT_INTEL_IPS))
-            elif scenario < 0.90:
-                simulate_exfiltration(producer, random.choice(THREAT_INTEL_IPS))
-            elif scenario < 0.95:
-                simulate_multistage_attack(producer, random.choice(PERSISTENT_ATTACKERS))
             else:
-                simulate_burst(producer, random.choice(THREAT_INTEL_IPS + PERSISTENT_ATTACKERS))
+                simulate_multistage_attack(producer, random.choice(PERSISTENT_ATTACKERS))
 
-            time.sleep(random.uniform(1.0, 3.2))
+            time.sleep(random.uniform(0.5, 2.0))
         except Exception as exc:
             SIMULATOR_FAILURES.labels(service="simulator").inc()
             log_json("ERROR", "Falha no simulador; reconectando", error=str(exc))

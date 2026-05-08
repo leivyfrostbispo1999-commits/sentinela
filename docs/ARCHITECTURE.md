@@ -1,26 +1,30 @@
-# Arquitetura do Sentinela
+# SENTINELA Architecture: AI-Native Security Operations
 
-## Visão Geral
-O Sentinela é uma plataforma de detecção de ameaças e SIEM (Security Information and Event Management) focada em observabilidade, resiliência e alta performance. Foi arquitetado com base em microsserviços, utilizando mensageria assíncrona (Kafka) para garantir tolerância a falhas e desacoplamento.
+O SENTINELA é uma plataforma modular projetada para XDR, Graph Analytics e SOC Autônomo.
+
+## Camadas da Plataforma
+1. **Telemetry Layer**: Ingestão cross-domain via Kafka (Endpoint eBPF, Network, CloudTrail, Identity).
+2. **Enrichment Layer**: Contextualização geográfica e reputacional em tempo real.
+3. **Analytics Layer (Flink)**: Processamento de stream stateful e Complex Event Processing (CEP) para detecção de Kill Chain.
+4. **Graph Layer (Neo4j)**: Modelagem de entidades e relações em um Security Knowledge Graph.
+5. **AI Layer**: Detecção de anomalias via Isolation Forest (scikit-learn) e triagem cerebral via Security Copilot.
+6. **Response Layer (SOAR)**: Execução de playbooks governados e remediação automatizada semi-autônoma.
 
 ## Componentes Principais
 
-### 1. Ingestão e Processamento
-- **Log Collector:** Recebe os logs brutos e padroniza para o formato interno.
-- **Kafka Pipeline:** Desacopla a ingestão do processamento, evitando gargalos.
-- **Rule Engine:** Avalia eventos em tempo real com base em regras YAML dinâmicas. Suporta janelas de correlação e rate-limiting (com estado no Redis).
+### 1. Ingestão e Processamento (XDR)
+- **Log Collector:** Recebe telemetria de domínios variados (Endpoint, Cloud, SaaS).
+- **Kafka Pipeline:** Orquestra o fluxo de dados entre enriquecimento e motores analíticos.
+- **Rule Engine:** Motor de correlação unitária e agregada com estado em Redis.
 
-### 2. Armazenamento e Histórico
-- **PostgreSQL:** Banco de dados relacional robusto armazenando estado dos alertas, metadados e incidentes agregados.
-- **Alert Sink:** Consumer que persiste alertas do Kafka no PostgreSQL.
+### 2. Stream & Graph Intelligence
+- **Apache Flink:** Executa matemática temporal distribuída para identificar sequências de intrusão.
+- **Neo4j Graph:** Mantém o grafo de relacionamentos entre usuários, hosts e recursos, permitindo Attack Path Inference.
 
-### 3. Dashboard e API
-- **Dashboard API:** Backend Flask assíncrono para a interface. Suporta JWT, Rate Limiting, Filtros dinâmicos e exportação de relatórios.
-- **Dashboard Web:** Interface front-end estática para os analistas do SOC visualizarem as métricas, investigações e topologia.
-
-### 4. Observabilidade (SRE)
-- **Prometheus:** Coleta as métricas de tempo de resposta, latência e vazão de todos os componentes.
-- **Grafana:** Exibe dashboards táticos (alertas) e operacionais (saúde da API, JVM, Garbage Collection).
+### 3. AI & Automation
+- **AI Engine:** Aplica modelos de Isolation Forest para detectar anomalias estatísticas sem regras fixas.
+- **SOC Copilot:** Assistente LLM-based para suporte analítico N3.
+- **SOAR Engine:** Executa respostas defensivas baseadas em risco e governança humana.
 
 ## Tolerância a Falhas
 A plataforma implementa o padrão de **Dead Letter Queue (DLQ)**. Eventos inválidos ou com erro intermitente de banco de dados sofrem *retry exponencial* antes de serem movidos para a DLQ, assegurando *zero message loss*.

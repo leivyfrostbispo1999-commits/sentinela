@@ -1,0 +1,79 @@
+rules:
+  - name: port_scan
+    description: Detecta varredura de portas contra servicos expostos.
+    enabled: true
+    event_type: PORT_SCAN
+    threshold: 3
+    window_seconds: 60
+    score: 25
+    severity: LOW
+    mitre_id: T1046
+    mitre_name: Network Service Discovery
+    mitre_tactic: Discovery
+    tags:
+      - reconnaissance
+      - network
+    correlation_key: source_ip
+    action: monitor
+
+  - name: ssh_brute_force
+    description: Detecta multiplas falhas de login SSH em curto intervalo.
+    enabled: true
+    event_type: FAILED_LOGIN
+    threshold: 5
+    window_seconds: 60
+    score: 40
+    severity: HIGH
+    mitre_id: T1110
+    mitre_name: Brute Force
+    mitre_tactic: Credential Access
+    tags:
+      - ssh
+      - credential_access
+    correlation_key: source_ip
+    action: simulated_block
+
+  - name: brute_force
+    description: Detecta evento explicito de brute force.
+    enabled: true
+    event_type: BRUTE_FORCE
+    threshold: 3
+    window_seconds: 60
+    score: 40
+    severity: HIGH
+    mitre_id: T1110
+    mitre_name: Brute Force
+    mitre_tactic: Credential Access
+    tags:
+      - credential_access
+    correlation_key: source_ip
+    action: simulated_block
+
+  - name: ioc_match
+    description: Detecta correspondencia com IOC local controlado.
+    enabled: true
+    event_type: IOC_MATCH
+    threshold: 1
+    window_seconds: 300
+    score: 85
+    severity: CRITICAL
+    mitre_id: T1071
+    mitre_name: Application Layer Protocol
+    mitre_tactic: Command and Control
+    tags:
+      - ioc
+      - threat_intel
+    correlation_key: source_ip
+    action: simulated_block
+
+  - name: disabled_example
+    description: Exemplo seguro de regra desabilitada ignorada pelo engine.
+    enabled: false
+    event_type: TEST_ONLY
+    score: 0
+    severity: LOW
+    mitre_id:
+    tags:
+      - example
+    correlation_key: source_ip
+    action: monitor

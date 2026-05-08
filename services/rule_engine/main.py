@@ -12,6 +12,7 @@ from threading import Thread
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 from pathlib import Path
+from mitre_utils import get_mitre_mapping
 
 try:
     import yaml
@@ -20,7 +21,7 @@ except ImportError:
 from kafka import KafkaConsumer, KafkaProducer
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 from threat_intel import check_ioc, check_ip
-from correlation_engine import CorrelationEngine, get_mitre_mapping
+from correlation_engine import CorrelationEngine
 from response_engine import ResponseEngine
 
 
@@ -78,21 +79,6 @@ SCORE_WEIGHTS = {
     "suspicious_ip": 20,
     "repeated_events_short_window": 30,
 }
-MITRE_MAPPINGS = {
-    "PORT_SCAN": {"mitre_id": "T1046", "mitre_name": "Network Service Discovery", "mitre_tactic": "Discovery"},
-    "SCAN": {"mitre_id": "T1046", "mitre_name": "Network Service Discovery", "mitre_tactic": "Discovery"},
-    "BRUTE_FORCE": {"mitre_id": "T1110", "mitre_name": "Brute Force", "mitre_tactic": "Credential Access"},
-    "FAILED_LOGIN": {"mitre_id": "T1110", "mitre_name": "Brute Force", "mitre_tactic": "Credential Access"},
-    "SSH_FAILED": {"mitre_id": "T1110", "mitre_name": "Brute Force", "mitre_tactic": "Credential Access"},
-    "LOGIN_FAILED": {"mitre_id": "T1110", "mitre_name": "Brute Force", "mitre_tactic": "Credential Access"},
-    "AUTH_FAILED": {"mitre_id": "T1110", "mitre_name": "Brute Force", "mitre_tactic": "Credential Access"},
-    "SUSPICIOUS": {"mitre_id": "T1087", "mitre_name": "Account Discovery", "mitre_tactic": "Discovery"},
-    "SUSPICIOUS_LOGIN": {"mitre_id": "T1087", "mitre_name": "Account Discovery", "mitre_tactic": "Discovery"},
-    "IOC_MATCH": {"mitre_id": "T1071", "mitre_name": "Application Layer Protocol", "mitre_tactic": "Command and Control"},
-    "IOC DETECTADO": {"mitre_id": "T1071", "mitre_name": "Application Layer Protocol", "mitre_tactic": "Command and Control"},
-    "ESCALATION": {"mitre_id": "T1068", "mitre_name": "Exploitation for Privilege Escalation", "mitre_tactic": "Privilege Escalation"},
-}
-MITRE_BY_ID = {value["mitre_id"]: value for value in MITRE_MAPPINGS.values()}
 REAL_MITRE_ID_PATTERN = re.compile(r"^T\d{4}(?:\.\d{3})?$")
 CRITICAL_STATUSES = {"ATAQUE MULTIETAPA", "CAMPANHA HOSTIL", "BRUTE FORCE CRITICO", "BRUTE FORCE CRÍTICO", "IOC DETECTADO"}
 SEVERITY_PRIORITY = {
@@ -547,6 +533,11 @@ def normalize_mitre_key(value):
     return str(value or "").replace("-", "_").replace(" ", "_").upper()
 
 
+try:
+    from mitre_utils import get_mitre_mapping, get_technique_details
+except ImportError:
+    from services.rule_engine.mitre_utils import get_mitre_mapping, get_technique_details
+
 def mitre_for_event(event_type, status=None, threat_match=None, simulated_block=False, rules=None):
     rules = rules or []
     event_key = normalize_mitre_key(event_type)
@@ -555,17 +546,23 @@ def mitre_for_event(event_type, status=None, threat_match=None, simulated_block=
             continue
         mitre_id = str(rule.get("mitre_id") or "").upper()
         if normalize_mitre_key(rule.get("event_type")) == event_key and REAL_MITRE_ID_PATTERN.match(mitre_id):
-            base = MITRE_BY_ID.get(str(rule.get("mitre_id")).upper(), {})
+            base = get_technique_details(mitre_id) or {}
             return {
                 "mitre_id": rule.get("mitre_id"),
-                "mitre_name": rule.get("mitre_name") or base.get("mitre_name") or rule.get("name", "Regra customizada"),
-                "mitre_tactic": rule.get("mitre_tactic") or base.get("mitre_tactic") or "Custom Detection",
+                "mitre_name": rule.get("mitre_name") or base.get("name") or rule.get("name", "Regra customizada"),
+                "mitre_tactic": rule.get("mitre_tactic") or base.get("tactic") or "Custom Detection",
             }
     if threat_match:
-        return MITRE_MAPPINGS["IOC_MATCH"]
-    if status and normalize_mitre_key(status) in MITRE_MAPPINGS:
-        return MITRE_MAPPINGS[normalize_mitre_key(status)]
-    return MITRE_MAPPINGS.get(event_key, {"mitre_id": None, "mitre_name": None, "mitre_tactic": None})
+        return get_mitre_mapping("IOC_MATCH")
+    if status and get_mitre_mapping(status).get("id"):
+        return get_mitre_mapping(status)
+    
+    mapping = get_mitre_mapping(event_key)
+    return {
+        "mitre_id": mapping.get("id"),
+        "mitre_name": mapping.get("name"),
+        "mitre_tactic": mapping.get("tactic")
+    }
 
 
 def normalize_source_ip(log):
@@ -1243,6 +1240,7 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
         "dedup_key": aggregate_state["dedup_key"],
         "rate_limit_window_seconds": aggregate_state["rate_limit_window_seconds"],
         "dedup_window_seconds": aggregate_state["dedup_window_seconds"],
+        "campaign_id": correlation_data.get("campaign_id"),
         "correlation_type": correlation_data.get("correlation_type"),
         "distributed_attack": correlation_data.get("distributed_attack", False),
         "source_count": correlation_data.get("source_count", 1),

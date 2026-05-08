@@ -125,39 +125,29 @@ services:
     restart: unless-stopped
     environment:
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
-      RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-raw_logs}
+      RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-enriched_logs}
       ALERTS_TOPIC: ${ALERTS_TOPIC:-security_alerts}
       DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
-      ENABLE_BLOCK: ${ENABLE_BLOCK:-false}
-      CORRELATION_WINDOW_SECONDS: ${CORRELATION_WINDOW_SECONDS:-300}
-      ALERT_DEDUP_WINDOW_SECONDS: ${ALERT_DEDUP_WINDOW_SECONDS:-60}
-      ALERT_RATE_LIMIT_WINDOW_SECONDS: ${ALERT_RATE_LIMIT_WINDOW_SECONDS:-60}
-      ALERT_AGGREGATION_WINDOW_SECONDS: ${ALERT_AGGREGATION_WINDOW_SECONDS:-120}
-      RULES_PATH: ${RULES_PATH:-rules.yaml}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      REDIS_STATE_ENABLED: ${REDIS_STATE_ENABLED:-true}
-      DLQ_TOPIC: ${DLQ_TOPIC:-dead_letter_events}
-      PIPELINE_MAX_RETRIES: ${PIPELINE_MAX_RETRIES:-3}
-      PIPELINE_RETRY_BACKOFF_MS: ${PIPELINE_RETRY_BACKOFF_MS:-500}
-      PIPELINE_MAX_BATCH_SIZE: ${PIPELINE_MAX_BATCH_SIZE:-100}
-      PIPELINE_CONSUMER_TIMEOUT_MS: ${PIPELINE_CONSUMER_TIMEOUT_MS:-1000}
-      PIPELINE_POLL_INTERVAL_MS: ${PIPELINE_POLL_INTERVAL_MS:-250}
       METRICS_PORT: 8000
     depends_on:
       kafka:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,os; os.environ['NO_PROXY']='127.0.0.1'; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()\""]
-      interval: 10s
-      timeout: 5s
-      retries: 8
-      start_period: 15s
     networks:
       - sentinela-net
-    mem_limit: 256m
-    cpus: "0.35"
+
+  ai-engine:
+    build: ./services/ai_engine
+    container_name: sentinela-ai-engine
+    restart: unless-stopped
+    depends_on:
+      - kafka
+      - enrichment-worker
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    networks:
+      - sentinela-net
 
   alert_sink:
     build: ./services/alert-sink
@@ -312,7 +302,6 @@ services:
 
   opensearch:
     image: opensearchproject/opensearch:2.13.0
-    profiles: ["search"]
     container_name: sentinela-opensearch
     restart: unless-stopped
     ports:
@@ -324,6 +313,23 @@ services:
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
     volumes:
       - sentinela-opensearch-data:/usr/share/opensearch/data
+    networks:
+      - sentinela-net
+    mem_limit: 1g
+    cpus: "0.75"
+
+  neo4j:
+    image: neo4j:5.19-community
+    container_name: sentinela-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/sentinela-graph
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - sentinela-neo4j-data:/data
     networks:
       - sentinela-net
     mem_limit: 1g
@@ -436,6 +442,102 @@ services:
     mem_limit: 128m
     cpus: "0.15"
 
+  flink-jobmanager:
+    image: flink:1.18.1-scala_2.12
+    container_name: sentinela-flink-jobmanager
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+    networks:
+      - sentinela-net
+    mem_limit: 512m
+    cpus: "0.50"
+
+  flink-taskmanager:
+    image: flink:1.18.1-scala_2.12
+    container_name: sentinela-flink-taskmanager
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    networks:
+      - sentinela-net
+    mem_limit: 1g
+    cpus: "1.0"
+
+  # --- Novos Microsserviços de Maturidade ---
+  ueba-engine:
+    build: ./services/ueba_engine
+    container_name: sentinela-ueba
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - UEBA_VOLUME_THRESHOLD=40
+    networks:
+      - sentinela-net
+
+  lifecycle-worker:
+    build: ./services/lifecycle_worker
+    container_name: sentinela-lifecycle
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_PASSWORD=root
+      - RETENTION_ALERTS_DAYS=7
+    networks:
+      - sentinela-net
+
+  enrichment-worker:
+    build: ./services/enrichment_worker
+    container_name: sentinela-enrichment
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - RAW_LOGS_TOPIC=raw_logs
+      - ENRICHED_LOGS_TOPIC=enriched_logs
+    networks:
+      - sentinela-net
+
+  flink-correlation-job:
+    build: ./services/flink_jobs
+    container_name: sentinela-flink-job
+    restart: unless-stopped
+    depends_on:
+      - kafka
+      - flink-jobmanager
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    networks:
+      - sentinela-net
+
+  graph-engine:
+    build: ./services/graph_engine
+    container_name: sentinela-graph-engine
+    restart: unless-stopped
+    depends_on:
+      - kafka
+      - neo4j
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_PASSWORD=sentinela-graph
+    networks:
+      - sentinela-net
+
 networks:
   sentinela-net:
     driver: bridge
@@ -445,3 +547,4 @@ volumes:
   sentinela-prometheus-data:
   sentinela-grafana-data:
   sentinela-opensearch-data:
+  sentinela-neo4j-data:
