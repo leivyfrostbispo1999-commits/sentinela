@@ -21,7 +21,7 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9094 --list >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server 127.0.0.1:9092 --list >/dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 12
@@ -86,7 +86,7 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,os; os.environ['NO_PROXY']='127.0.0.1'; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()\""]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -109,7 +109,7 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,os; os.environ['NO_PROXY']='127.0.0.1'; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()\""]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -149,7 +149,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,os; os.environ['NO_PROXY']='127.0.0.1'; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()\""]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -188,7 +188,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,os; os.environ['NO_PROXY']='127.0.0.1'; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()\""]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -231,11 +231,13 @@ services:
       ENABLE_OPENSEARCH: ${ENABLE_OPENSEARCH:-false}
       OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
       OPENSEARCH_INDEX_ALERTS: ${OPENSEARCH_INDEX_ALERTS:-sentinela-alerts}
+    volumes:
+      - ./infra:/app/infra
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/ready', timeout=3).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,os; os.environ['NO_PROXY']='127.0.0.1'; urllib.request.urlopen('http://127.0.0.1:5000/ready', timeout=3).read()\""]
       interval: 10s
       timeout: 5s
       retries: 8

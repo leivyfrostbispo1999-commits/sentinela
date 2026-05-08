@@ -1,6 +1,38 @@
 # SENTINELA 7.0
 
+![Sentinela SOC Dashboard](docs/images/placeholder_dashboard.png)
+*(Screenshot Placeholder - SOC Dashboard)*
+
 SENTINELA 7.0 é um mini-SIEM educacional/profissional com arquitetura inspirada em ambientes reais de SOC.
+
+## 🚀 Portfólio Técnico (Resumo)
+
+O Sentinela foi arquitetado para demonstrar maturidade técnica, tolerância a falhas e observabilidade em uma arquitetura baseada em eventos. 
+
+### Visão Geral e Arquitetura
+O sistema utiliza **Kafka** para desacoplar a ingestão de logs da análise em tempo real (Rule Engine). O estado das janelas de correlação é mantido no **Redis**, enquanto os incidentes processados são persistidos de forma segura no **PostgreSQL**. A API backend, em Python/Flask assíncrono, expõe os dados para um **Dashboard React/Vanilla** moderno.
+
+### Fluxo de Eventos e Pipeline Kafka
+1. **Ingestão:** `log_collector` e `simulator` produzem eventos no tópico `raw_logs`.
+2. **Processamento:** O `rule_engine` consome, aplica regras YAML dinâmicas, enriquece com MITRE ATT&CK e calcula o Threat Score.
+3. **Persistência:** O `alert_sink` consome de `security_alerts` e salva no banco.
+4. **Resiliência (DLQ e Retries):** Em caso de falha de I/O, mensagens sofrem *backoff exponencial*. Após falhar N vezes, vão para o tópico de **Dead Letter Queue (DLQ)**.
+
+### Observabilidade e Validação de Carga
+Toda a infraestrutura é instrumentada. O Prometheus coleta métricas HTTP, latência e vazão do Kafka, que são exibidas em painéis táticos e operacionais no **Grafana**. 
+O projeto inclui um teste pesado em **k6** (`tests/load/sentinela-load-test.js`) que valida backpressure e degradação sob carga de 200 VUs.
+
+### Segurança e Hardening
+A segurança atua em todas as camadas: Rate Limiting (Redis/Memória), JWT e Refresh Tokens, Audit Trail no PostgreSQL, suporte a TLS, Content Security Policies rígidas e uso de rede Docker isolada (sem expor banco para fora indevidamente).
+
+### Comandos Rápidos
+- **Subir ambiente:** `docker compose up -d`
+- **Rebuild limpo:** `.\scripts\clean-rebuild.ps1`
+- **Validar runtime:** `.\scripts\validate-runtime.ps1`
+- **Teste de Carga:** `k6 run tests/load/sentinela-load-test.js`
+- **Solução de Problemas:** Consulte o [Guia de Troubleshooting Docker/WSL2](docs/TROUBLESHOOTING_DOCKER_WSL2.md) para resolver lentidões no Windows e erros de `http.docker.internal`.
+
+---
 
 O projeto demonstra um pipeline completo de segurança: geração e coleta de eventos, ingestão via Kafka, detecção por regras YAML, correlação temporal com state store Redis, Threat Intelligence, persistência em PostgreSQL, autenticação por token/JWT, métricas Prometheus e dashboard SOC em tempo real.
 

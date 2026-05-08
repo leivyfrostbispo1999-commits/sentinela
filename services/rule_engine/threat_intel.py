@@ -1,13 +1,17 @@
 import hashlib
 import os
 import re
+import json
+import socket
 from urllib.parse import urlparse
-
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 ENABLE_IOC_ENRICHMENT = os.getenv("ENABLE_IOC_ENRICHMENT", "true").lower() == "true"
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY", "")
 OTX_API_KEY = os.getenv("OTX_API_KEY", "")
+THREAT_TIMEOUT = float(os.getenv("THREAT_TIMEOUT", "2.0"))
 
 IP_DB = {
     "45.67.89.12": {"reputation_score": 95, "category": "BOTNET", "description": "IP associado a botnet ativa"},
@@ -32,10 +36,8 @@ HASH_DB = {
     "275a021bbfb6489e54d471899f7db9d1": {"reputation_score": 94, "category": "MALWARE_HASH", "description": "Hash local simulado de malware"},
 }
 
-
 def normalize_indicator(value):
     return str(value or "").strip().lower()
-
 
 def indicator_type(value):
     indicator = normalize_indicator(value)
@@ -49,60 +51,101 @@ def indicator_type(value):
         return "domain"
     return "unknown"
 
+def virustotal_lookup(value):
+    if not VIRUSTOTAL_API_KEY:
+        return None
+    kind = indicator_type(value)
+    # VT usa endpoints diferentes para cada tipo
+    endpoint_map = {"ip": "ip_addresses", "domain": "domains", "hash": "files", "url": "urls"}
+    if kind not in endpoint_map:
+        return None
+    
+    indicator = normalize_indicator(value)
+    if kind == "url":
+        # VT exige hash base64 sem padding ou SHA256 para URLs, simplificando aqui para exemplo estrutural
+        return None
 
-def provider_metadata():
-    providers = ["local_mock"]
-    if VIRUSTOTAL_API_KEY:
-        providers.append("virustotal_configured")
-    if ABUSEIPDB_API_KEY:
-        providers.append("abuseipdb_configured")
-    if OTX_API_KEY:
-        providers.append("otx_configured")
-    return providers
+    url = f"https://www.virustotal.com/api/v3/{endpoint_map[kind]}/{indicator}"
+    headers = {"x-apikey": VIRUSTOTAL_API_KEY}
+    
+    try:
+        req = Request(url, headers=headers)
+        with urlopen(req, timeout=THREAT_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode())
+            stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+            malicious = stats.get("malicious", 0)
+            suspicious = stats.get("suspicious", 0)
+            
+            if malicious > 0:
+                return {
+                    "reputation_score": min(100, 50 + (malicious * 10)),
+                    "category": "MALICIOUS_VT",
+                    "description": f"VirusTotal identificou {malicious} engines reportando como malicioso",
+                    "source": "virustotal"
+                }
+    except Exception:
+        pass
+    return None
 
+def abuseipdb_lookup(ip):
+    if not ABUSEIPDB_API_KEY or indicator_type(ip) != "ip":
+        return None
+    
+    url = f"https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90"
+    headers = {"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"}
+    
+    try:
+        req = Request(url, headers=headers)
+        with urlopen(req, timeout=THREAT_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode())
+            score = data.get("data", {}).get("abuseConfidenceScore", 0)
+            if score >= 25:
+                return {
+                    "reputation_score": score,
+                    "category": "SUSPICIOUS_IP_ABUSEIPDB",
+                    "description": f"AbuseIPDB reportou score de abuso de {score}%",
+                    "source": "abuseipdb"
+                }
+    except Exception:
+        pass
+    return None
 
 def local_lookup(value):
     indicator = normalize_indicator(value)
     kind = indicator_type(indicator)
-    if kind == "url":
+    
+    if kind == "ip":
+        match = IP_DB.get(indicator)
+    elif kind == "domain":
+        match = DOMAIN_DB.get(indicator)
+    elif kind == "url":
         match = URL_DB.get(indicator)
         if not match:
             host = urlparse(indicator).hostname or ""
             match = DOMAIN_DB.get(host.lower())
-    elif kind == "domain":
-        match = DOMAIN_DB.get(indicator)
     elif kind == "hash":
         match = HASH_DB.get(indicator)
-    elif kind == "ip":
-        match = IP_DB.get(indicator)
     else:
         match = None
-    if not match:
-        return None
-    return {**match, "indicator": indicator, "indicator_type": kind, "source": "local_mock", "providers": provider_metadata()}
 
-
-def heuristic_lookup(value):
-    indicator = normalize_indicator(value)
-    kind = indicator_type(indicator)
-    if kind == "domain" and any(token in indicator for token in ("malware", "phishing", "c2")):
-        return {"indicator": indicator, "indicator_type": kind, "reputation_score": 76, "category": "SUSPICIOUS_DOMAIN", "description": "Heuristica local identificou dominio suspeito", "source": "heuristic_mock", "providers": provider_metadata()}
-    if kind == "url" and any(token in indicator for token in ("login", "dropper", "payload", "cmd")):
-        return {"indicator": indicator, "indicator_type": kind, "reputation_score": 78, "category": "SUSPICIOUS_URL", "description": "Heuristica local identificou URL suspeita", "source": "heuristic_mock", "providers": provider_metadata()}
-    if kind == "hash":
-        score = 70 + int(hashlib.sha256(indicator.encode("utf-8")).hexdigest()[:2], 16) % 20
-        return {"indicator": indicator, "indicator_type": kind, "reputation_score": score, "category": "UNKNOWN_HASH", "description": "Hash desconhecido avaliado por mock local", "source": "heuristic_mock", "providers": provider_metadata()}
+    if match:
+        return {**match, "indicator": indicator, "indicator_type": kind, "source": "local_mock"}
     return None
-
 
 def check_ioc(value):
     if not ENABLE_IOC_ENRICHMENT:
         return None
-    return local_lookup(value) or heuristic_lookup(value)
-
+    
+    # Ordem de prioridade: Local -> AbuseIPDB (IPs) -> VirusTotal
+    result = local_lookup(value)
+    if result: return result
+    
+    kind = indicator_type(value)
+    if kind == "ip":
+        result = abuseipdb_lookup(value)
+        if result: return result
+        
+    return virustotal_lookup(value)
 
 def check_ip(ip):
-    result = check_ioc(ip)
-    if result and result.get("indicator_type") == "ip":
-        return result
-    return None
+    return check_ioc(ip)

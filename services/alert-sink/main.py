@@ -107,6 +107,12 @@ def ensure_opensearch_index():
                 "evidence": {"type": "text"},
                 "event_type": {"type": "keyword"},
                 "mitre_id": {"type": "keyword"},
+                "target_ip": {"type": "keyword"},
+                "target_user": {"type": "keyword"},
+                "service": {"type": "keyword"},
+                "kill_chain_phase": {"type": "integer"},
+                "kill_chain_highest": {"type": "integer"},
+                "is_distributed": {"type": "boolean"}
             }
         }
     }
@@ -119,6 +125,7 @@ def ensure_opensearch_index():
 
 
 def alert_search_document(alert):
+    kc = alert.get("kill_chain") or {}
     return {
         "id": str(alert.get("idempotency_key") or alert.get("event_id") or ""),
         "event_id": str(alert.get("event_id") or ""),
@@ -134,6 +141,12 @@ def alert_search_document(alert):
         "evidence": alert.get("correlation_reasons") or alert.get("risk_reasons") or [],
         "event_type": alert.get("event_type"),
         "mitre_id": alert.get("mitre_id"),
+        "target_ip": alert.get("target_ip"),
+        "target_user": alert.get("target_user"),
+        "service": alert.get("service"),
+        "kill_chain_phase": kc.get("current_phase"),
+        "kill_chain_highest": kc.get("highest_phase"),
+        "is_distributed": bool(alert.get("distributed_attack"))
     }
 
 
@@ -398,9 +411,26 @@ def ensure_schema(conn):
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_last_seen ON incidents (last_seen DESC)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_alerts_alert_id ON incident_alerts (alert_id)")
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_idempotency_key ON incidents (idempotency_key) WHERE idempotency_key IS NOT NULL")
-    conn.commit()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS response_actions (
+                id SERIAL PRIMARY KEY,
+                action_id UUID UNIQUE NOT NULL,
+                alert_id UUID NOT NULL,
+                tenant_id TEXT DEFAULT 'default',
+                action_type TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                target_entity TEXT,
+                reason TEXT,
+                status TEXT DEFAULT 'simulated',
+                metadata_json JSONB DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_response_actions_alert_id ON response_actions (alert_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_response_actions_tenant_id ON response_actions (tenant_id)")
+        conn.commit()
 
 
 def create_consumer():
@@ -960,6 +990,32 @@ def persist_alert(conn, alert):
                 """,
                 (ip, alert.get("status", "ATIVIDADE SUSPEITA"), alert.get("auto_response", "simulated_block")),
             )
+
+        # SOAR: Persistir ações automáticas
+        actions = alert.get("auto_response_actions", [])
+        for action in actions:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO response_actions (
+                        action_id, alert_id, tenant_id, action_type, mode, target_entity, reason, status
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (action_id) DO NOTHING
+                    """,
+                    (
+                        action["action_id"], 
+                        str(alert["event_id"]), 
+                        alert.get("tenant_id", "default"),
+                        action["type"],
+                        action["mode"],
+                        action["target"],
+                        action["reason"],
+                        action["status"]
+                    )
+                )
+            except Exception as exc:
+                log_json("WARN", "Falha ao gravar ação SOAR", error=str(exc), action_id=action.get("action_id"))
 
     incident_id = persist_incident_for_alert(conn, alert)
     conn.commit()

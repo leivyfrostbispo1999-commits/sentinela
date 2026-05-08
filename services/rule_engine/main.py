@@ -20,6 +20,8 @@ except ImportError:
 from kafka import KafkaConsumer, KafkaProducer
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 from threat_intel import check_ioc, check_ip
+from correlation_engine import CorrelationEngine, get_mitre_mapping
+from response_engine import ResponseEngine
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -257,6 +259,8 @@ class InMemoryCorrelationStore:
         self.window_seconds = window_seconds
         self.ip_events = defaultdict(lambda: deque())
         self.alert_buckets = defaultdict(lambda: deque())
+        self.global_sets = defaultdict(lambda: {})  # {key: {value: timestamp}}
+        self.global_counters = defaultdict(lambda: deque()) # {key: deque([timestamps])}
 
     def add_event(self, ip, event):
         now = event["seen_at"]
@@ -273,6 +277,24 @@ class InMemoryCorrelationStore:
             bucket.popleft()
         bucket.append(normalize_aggregate_entry(alert))
         return summarize_bucket(aggregation_key, status, list(bucket), alert)
+
+    def add_to_set(self, key, value, window_seconds):
+        now = time.time()
+        subset = self.global_sets[key]
+        # Limpeza
+        expired = [v for v, ts in subset.items() if now - ts > window_seconds]
+        for v in expired:
+            del subset[v]
+        subset[value] = now
+        return set(subset.keys())
+
+    def increment_counter(self, key, window_seconds):
+        now = time.time()
+        counts = self.global_counters[key]
+        while counts and now - counts[0] > window_seconds:
+            counts.popleft()
+        counts.append(now)
+        return len(counts)
 
 
 class RedisCorrelationStore:
@@ -322,6 +344,11 @@ class RedisCorrelationStore:
                 payload += sock.recv(length - len(payload))
             sock.recv(2)
             return payload.decode("utf-8")
+        if marker == b"*":
+            length = int(self._read_line(sock))
+            if length == -1:
+                return None
+            return [self._read_response(sock) for _ in range(length)]
         raise RuntimeError(f"resposta Redis não suportada: {marker!r}")
 
     def _execute(self, *parts):
@@ -355,6 +382,17 @@ class RedisCorrelationStore:
         self._execute("SET", key, json.dumps(entries, ensure_ascii=False), "EX", ALERT_AGGREGATION_WINDOW_SECONDS * 2)
         return summarize_bucket(aggregation_key, status, entries, alert)
 
+    def add_to_set(self, key, value, window_seconds):
+        self._execute("SADD", key, value)
+        self._execute("EXPIRE", key, window_seconds)
+        return set(self._execute("SMEMBERS", key) or [])
+
+    def increment_counter(self, key, window_seconds):
+        count = self._execute("INCR", key)
+        if count == 1:
+            self._execute("EXPIRE", key, window_seconds)
+        return int(count or 0)
+
 
 def create_state_store():
     if REDIS_STATE_ENABLED:
@@ -368,17 +406,75 @@ def create_state_store():
 
 
 STATE_STORE = create_state_store()
+CORRELATION_ENGINE = CorrelationEngine(STATE_STORE, STATE_WINDOW_SECONDS)
+RESPONSE_ENGINE = ResponseEngine(STATE_STORE)
 
 
 def load_rules():
     fallback = {
         "rules": [
-            {"name": "port_scan", "description": "Detecta varredura de portas", "enabled": True, "priority": 20, "event_type": "PORT_SCAN", "score": 25, "severity": "LOW", "mitre_id": "T1046", "threshold": 1, "window_seconds": 60, "tags": ["reconnaissance"], "correlation_key": "source_ip", "action": "monitor"},
-            {"name": "ssh_brute_force", "description": "Detecta múltiplas falhas de login SSH em curto intervalo", "enabled": True, "priority": 40, "event_type": "FAILED_LOGIN", "score": 40, "severity": "HIGH", "mitre_id": "T1110", "threshold": 5, "window_seconds": 60, "tags": ["ssh", "credential_access"], "correlation_key": "source_ip", "action": "simulated_block"},
-            {"name": "brute_force", "description": "Detecta padrão explícito de brute force", "enabled": True, "priority": 45, "event_type": "BRUTE_FORCE", "score": 40, "severity": "HIGH", "mitre_id": "T1110", "threshold": 3, "window_seconds": 60, "tags": ["credential_access"], "correlation_key": "source_ip", "action": "simulated_block"},
-            {"name": "ioc_match", "description": "Detecta correspondência com IOC local", "enabled": True, "priority": 90, "event_type": "IOC_MATCH", "score": 85, "severity": "CRITICAL", "mitre_id": "T1071", "threshold": 1, "window_seconds": 300, "tags": ["ioc", "threat_intel"], "correlation_key": "source_ip", "action": "simulated_block"},
-            {"name": "ataque_multi_etapa", "enabled": True, "priority": 80, "conditions": ["PORT_SCAN", "BRUTE_FORCE"], "min_risk": 97, "risk": 97, "status": "ATAQUE MULTIETAPA", "tags": ["fallback"]},
-            {"name": "campanha_hostil", "enabled": True, "priority": 70, "threshold": 7, "min_risk": 95, "risk": 95, "status": "CAMPANHA HOSTIL", "tags": ["fallback"]},
+            {
+                "title": "port_scan", 
+                "description": "Detecta varredura de portas", 
+                "enabled": True, 
+                "priority": 20, 
+                "detection": {"selection": {"event_type": "PORT_SCAN"}, "condition": "selection"},
+                "level": "LOW", 
+                "tags": ["attack.t1046"], 
+                "action": "monitor"
+            },
+            {
+                "title": "ssh_brute_force", 
+                "description": "Detecta múltiplas falhas de login SSH", 
+                "enabled": True, 
+                "priority": 40, 
+                "detection": {"selection": {"event_type": "FAILED_LOGIN"}, "condition": "selection"},
+                "threshold": {"count": 5, "timeframe": "60s"},
+                "level": "HIGH", 
+                "tags": ["ssh", "attack.t1110"], 
+                "action": "simulated_block"
+            },
+            {
+                "title": "brute_force", 
+                "description": "Detecta padrão explícito de brute force", 
+                "enabled": True, 
+                "priority": 45, 
+                "detection": {"selection": {"event_type": "BRUTE_FORCE"}, "condition": "selection"},
+                "threshold": {"count": 3, "timeframe": "60s"},
+                "level": "HIGH", 
+                "tags": ["attack.t1110"], 
+                "action": "simulated_block"
+            },
+            {
+                "title": "ioc_match", 
+                "description": "Detecta correspondência com IOC local", 
+                "enabled": True, 
+                "priority": 90, 
+                "detection": {"selection": {"event_type": "IOC_MATCH"}, "condition": "selection"},
+                "level": "CRITICAL", 
+                "tags": ["ioc", "attack.t1071"], 
+                "action": "simulated_block"
+            },
+            {
+                "title": "ataque_multi_etapa", 
+                "enabled": True, 
+                "priority": 80, 
+                "detection": {"selection": {"event_type": ["PORT_SCAN", "BRUTE_FORCE"]}, "condition": "selection"},
+                "threshold": {"count": 2, "timeframe": "300s"},
+                "level": "HIGH", 
+                "status": "ATAQUE MULTIETAPA", 
+                "tags": ["fallback"]
+            },
+            {
+                "title": "campanha_hostil", 
+                "enabled": True, 
+                "priority": 70, 
+                "threshold": {"count": 7, "timeframe": "300s"},
+                "detection": {"selection": {"event_type": "ANY"}, "condition": "selection"},
+                "level": "HIGH", 
+                "status": "CAMPANHA HOSTIL", 
+                "tags": ["fallback"]
+            },
         ]
     }
 
@@ -386,31 +482,35 @@ def load_rules():
         normalized = []
         for rule in rules:
             if not isinstance(rule, dict):
-                log_json("WARN", "Regra YAML ignorada: item inválido")
                 continue
             if rule.get("enabled", True) is False:
-                log_json("INFO", "Regra YAML desabilitada ignorada", rule=rule.get("name"))
                 continue
-            if not rule.get("name"):
-                log_json("WARN", "Regra YAML ignorada: nome ausente", rule=rule)
+                
+            # Mapeamento DSL -> Interno
+            name = rule.get("title") or rule.get("name")
+            if not name:
                 continue
-            if not rule.get("event_type") and not rule.get("conditions") and not rule.get("threshold"):
-                log_json("WARN", "Regra YAML ignorada: condição ausente", rule=rule.get("name"))
-                continue
-            score = rule.get("score", rule.get("risk", rule.get("min_risk", 0)))
-            try:
-                score = int(score or 0)
-            except (TypeError, ValueError):
-                log_json("WARN", "Regra YAML com score inválido; usando 0", rule=rule.get("name"), score=rule.get("score"))
-                score = 0
+                
+            level = str(rule.get("level") or rule.get("severity") or "low").upper()
+            score_map = {"CRITICAL": 95, "HIGH": 75, "MEDIUM": 50, "LOW": 25, "INFORMATIONAL": 10}
+            score = rule.get("score") or score_map.get(level, 25)
+            
+            # Extração de MITRE das tags (ex: attack.t1110)
+            mitre_id = rule.get("mitre_id")
+            tags = rule.get("tags") or []
+            if not mitre_id:
+                for tag in tags:
+                    if "attack.t" in tag.lower():
+                        mitre_id = tag.split(".")[-1].upper()
+                        break
+
             normalized.append({
                 **rule,
-                "score": score,
-                "severity": str(rule.get("severity") or severity_from_score(score)).upper(),
-                "threshold": int(rule.get("threshold") or 1),
-                "window_seconds": int(rule.get("window_seconds") or os.getenv("CORRELATION_WINDOW_SECONDS", "300")),
-                "tags": rule.get("tags") if isinstance(rule.get("tags"), list) else [],
-                "correlation_key": rule.get("correlation_key", "source_ip"),
+                "name": name,
+                "score": int(score),
+                "severity": level,
+                "mitre_id": mitre_id,
+                "window_seconds": int(str(rule.get("window_seconds", "300")).replace("s", "")),
                 "action": rule.get("action", "monitor"),
             })
         return normalized
@@ -577,29 +677,84 @@ def sequence_matches(events, conditions):
     return False
 
 
+def match_selection(log, selection):
+    """
+    Avalia se um log atende a uma seleção (dicionário de critérios).
+    Suporta listas (OR) e valores simples.
+    """
+    for field, value in selection.items():
+        log_value = log.get(field)
+        if value == "ANY" or value == ["ANY"]:
+            continue
+            
+        if isinstance(value, list):
+            if str(log_value).upper() not in [str(v).upper() for v in value]:
+                return False
+        else:
+            if str(log_value).upper() != str(value).upper():
+                return False
+    return True
+
+
 def apply_yaml_rules(events, rules):
     matches = []
+    log = events[-1] if events else {}
+    
     for rule in rules:
         if rule.get("enabled", True) is False:
             continue
 
-        scoped_events = rule_window_events(events, rule)
-        conditions = rule.get("conditions", [])
-        threshold = int(rule.get("threshold") or 0)
+        # 1. Filtro por Logsource (Otimização)
+        logsource = rule.get("logsource", {})
+        if logsource:
+            mismatch = False
+            for field, value in logsource.items():
+                log_value = log.get(field)
+                if isinstance(value, list):
+                    if str(log_value).upper() not in [str(v).upper() for v in value]:
+                        mismatch = True
+                        break
+                elif str(log_value).upper() != str(value).upper():
+                    mismatch = True
+                    break
+            if mismatch:
+                continue
 
-        matched = False
-        if conditions and threshold:
-            count = sum(1 for item in scoped_events if any(event_matches(item, condition) for condition in conditions))
-            matched = count >= threshold
-        elif conditions:
-            matched = sequence_matches(scoped_events, conditions)
-        elif threshold:
-            matched = len(scoped_events) >= threshold
+        # 2. Avaliação de Detection
+        detection = rule.get("detection", {})
+        if not detection:
+            continue
+            
+        # Simplificação: suporte apenas a uma seleção nomeada por enquanto
+        # Para Sigma completo, precisaríamos de um parser de expressões booleanas
+        selections = {k: v for k, v in detection.items() if k != "condition"}
+        condition_str = detection.get("condition", "")
+        
+        matched_selection = False
+        for sel_name, sel_body in selections.items():
+            if match_selection(log, sel_body):
+                matched_selection = True
+                break
+        
+        if not matched_selection:
+            continue
 
-        if matched:
-            matches.append(rule)
+        # 3. Avaliação de Threshold/Aggregation
+        threshold = rule.get("threshold", {})
+        if threshold:
+            timeframe = int(str(threshold.get("timeframe", "300")).replace("s", ""))
+            count_needed = int(threshold.get("count", 1))
+            
+            now = time.time()
+            scoped_events = [e for e in events if now - e["seen_at"] <= timeframe]
+            
+            # Se a regra for de threshold, precisamos que o count seja atingido
+            if len(scoped_events) < count_needed:
+                continue
 
-    return sorted(matches, key=lambda item: int(item.get("priority") or 0), reverse=True)
+        matches.append(rule)
+
+    return sorted(matches, key=lambda item: int(item.get("priority", 0)), reverse=True)
 
 
 def build_correlation(events, log):
@@ -924,7 +1079,8 @@ def calculate_risk(log, events, threat_match, rules):
 
     for rule in matched_rules:
         status = rule.get("status", status)
-        reasons.append(f"regra_yaml:{rule.get('name', 'sem_nome')}")
+        rule_name = rule.get("title") or rule.get("name") or "sem_nome"
+        reasons.append(f"regra_yaml:{rule_name}")
         for tag in rule.get("tags", []):
             reasons.append(f"tag:{tag}")
 
@@ -973,11 +1129,12 @@ def simulated_auto_response(status, risk, threat_intel_match):
     return "none", False
 
 
-def build_alert(log, status, risk, events, risk_reasons, auto_response, simulated_block, threat, correlation_key, correlation_reason, rules=None):
+def build_alert(log, status, risk, events, risk_reasons, auto_response, simulated_block, threat, correlation_key, correlation_reason, rules=None, correlation_data=None):
     event_id = log.get("event_id") or str(uuid.uuid4())
     log["event_id"] = event_id
     tenant_id = log.get("tenant_id") or DEFAULT_TENANT_ID
     correlation_id = log.get("correlation_id") or event_id
+    correlation_data = correlation_data or {}
 
     threat_intel_match = threat is not None
     event_type = normalize_event_type(log)
@@ -989,6 +1146,12 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
     score_data = calculate_threat_score(log, events, threat)
     score_breakdown = calculate_score_breakdown(log, events, threat, rules or [])
     risk = max(int(risk or 0), int(score_breakdown["final_score"]))
+
+    # Eleva o risco se for ataque distribuído
+    if correlation_data.get("distributed_attack"):
+        risk = max(risk, 90)
+        status = "CAMPANHA DISTRIBUÍDA" if risk >= 90 else status
+
     correlation_reasons = unique_preserve_order([correlation_reason, *risk_reasons, *score_data["reasons"]])
     source_ip = normalize_source_ip(log)
     base_alert = {
@@ -1020,7 +1183,7 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
     aggregate_state = STATE_STORE.record_aggregate(aggregation_key, status, base_alert)
     mitre = mitre_for_event(event_type, status=status, threat_match=threat_intel_match, simulated_block=simulated_block, rules=rules)
     matched_rule = (score_breakdown.get("matched_rules") or [None])[0] or {}
-    target = score_breakdown["target_context"]
+    target = target_context(log, port, service)
     response = response_plan(risk, threat_intel_match, simulated_block)
 
     alert = {
@@ -1041,7 +1204,7 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
         "internal_rule_name": matched_rule.get("description") or matched_rule.get("name") or f"Deteccao {event_type}",
         "correlation_rule": correlation_key,
         "detection_source": "rule_engine",
-        "alert_type": alert_kind(risk, event_count=len(events)),
+        "alert_type": alert_kind(risk, event_count=len(events), source_ip_count=correlation_data.get("source_count", 1)),
         "score_breakdown": {key: value for key, value in score_breakdown.items() if key not in {"matched_rules", "target_context", "status"}},
         "score_explanation": score_breakdown["score_explanation"],
         **target,
@@ -1080,6 +1243,13 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
         "dedup_key": aggregate_state["dedup_key"],
         "rate_limit_window_seconds": aggregate_state["rate_limit_window_seconds"],
         "dedup_window_seconds": aggregate_state["dedup_window_seconds"],
+        "correlation_type": correlation_data.get("correlation_type"),
+        "distributed_attack": correlation_data.get("distributed_attack", False),
+        "source_count": correlation_data.get("source_count", 1),
+        "involved_sources": correlation_data.get("involved_sources", [source_ip]),
+        "confidence": correlation_data.get("confidence", "medium"),
+        "recommendation": correlation_data.get("recommendation"),
+        "kill_chain": correlation_data.get("kill_chain", {})
     }
     alert["human_summary"] = human_summary_for_alert(alert)
     alert["explanation"] = alert["human_summary"]
@@ -1154,12 +1324,42 @@ def process_log(log, producer, rules):
 
     events = update_state(log)
     threat = enrich_event_ioc(log)
+    
+    # Nova Correlation Engine
+    correlation_data = CORRELATION_ENGINE.correlate(log, events, threat)
+    
     RULES_EXECUTED.inc(len(rules or []))
     status, risk, risk_reasons = calculate_risk(log, events, threat, rules)
+    
+    # Mesclar razões de correlação
+    all_reasons = unique_preserve_order(risk_reasons + correlation_data.get("reasons", []))
+    
     correlation_key, correlation_reason = build_correlation(events, log)
     auto_response, simulated_block = simulated_auto_response(status, risk, threat is not None)
-    alert = build_alert(log, status, risk, events, risk_reasons, auto_response, simulated_block, threat, correlation_key, correlation_reason, rules)
-
+    
+    # Se a correlação distribuída indicou bloco, priorizar
+    if correlation_data.get("distributed_attack"):
+        simulated_block = True
+        auto_response = "simulated_block"
+    
+    alert = build_alert(log, status, risk, events, all_reasons, auto_response, simulated_block, threat, correlation_key, correlation_reason, rules, correlation_data)
+    
+    # SOAR: Decisão de Resposta Automática
+    alert["auto_response_actions"] = RESPONSE_ENGINE.decide_response(alert)
+    
+    # Enriquecimento MITRE dinâmico
+    mitre_map = get_mitre_mapping(alert.get("event_type"))
+    if mitre_map.get("id"):
+        alert["mitre_id"] = mitre_map["id"]
+        alert["mitre_name"] = mitre_map["name"]
+        alert["mitre_tactic"] = mitre_map["tactic"]
+        if not any(m.get("id") == mitre_map["id"] for m in alert.get("mitre_techniques", [])):
+            alert.setdefault("mitre_techniques", []).append({
+                "id": mitre_map["id"],
+                "name": mitre_map["name"],
+                "tactic": mitre_map["tactic"]
+            })
+    
     producer.send(ALERTS_TOPIC, alert)
     producer.flush(timeout=2)
     ALERTS_PUBLISHED.inc()

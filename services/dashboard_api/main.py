@@ -2525,6 +2525,183 @@ def health():
     return jsonify({"status": "ok", "service": "dashboard_api", "ready": SCHEMA_INITIALIZED})
 
 
+@app.get("/auth/users")
+@require_role("admin")
+def list_users():
+    return jsonify({"count": len(USERS), "data": [
+        {"username": u["username"], "role": u["role"], "tenant_id": u["tenant_id"]}
+        for u in USERS.values()
+    ]})
+
+
+@app.get("/auth/permissions")
+@require_auth
+def list_permissions():
+    identity = getattr(request, "sentinela_identity", {})
+    role = identity.get("role", "viewer")
+    
+    perms_map = {
+        "admin": ["alert:read", "alert:write", "incident:read", "incident:write", "user:manage", "audit:read"],
+        "analyst": ["alert:read", "alert:write", "incident:read", "incident:write"],
+        "viewer": ["alert:read", "incident:read"]
+    }
+    
+    return jsonify({
+        "role": role,
+        "permissions": perms_map.get(role, ["alert:read"])
+    })
+
+
+@app.get("/hunting")
+@require_auth
+def hunting():
+    """
+    Endpoint de busca avançada e Threat Hunting.
+    Suporta agregações e filtros temporais.
+    """
+    REQUEST_COUNTER.labels(endpoint="hunting").inc()
+    query = request.args.get("q", "").strip()
+    range_val = request.args.get("range", "24h")
+    limit, offset = pagination_params(default_limit=10, max_limit=100)
+    
+    if not opensearch_available():
+        return jsonify({"error": "opensearch_unavailable", "message": "O backend de busca avançada não está disponível."}), 503
+
+    # Mapeia range para filtro OpenSearch
+    range_map = {"1h": "now-1h", "24h": "now-24h", "7d": "now-7d"}
+    os_range = range_map.get(range_val, "now-24h")
+
+    payload = {
+        "from": offset,
+        "size": limit,
+        "sort": [{"timestamp": {"order": "desc"}}],
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"tenant_id.keyword": tenant_id()}},
+                    {"range": {"timestamp": {"gte": os_range}}}
+                ],
+                "must": [{"query_string": {"query": query}}] if query else [{"match_all": {}}]
+            }
+        },
+        "aggs": {
+            "top_sources": {"terms": {"field": "source.keyword", "size": 10}},
+            "top_techniques": {"terms": {"field": "mitre_id.keyword", "size": 10}},
+            "severity_dist": {"terms": {"field": "severity.keyword"}},
+            "timeline": {
+                "date_histogram": {
+                    "field": "timestamp",
+                    "fixed_interval": "1h" if range_val != "1h" else "5m"
+                }
+            }
+        }
+    }
+
+    try:
+        result = opensearch_request(f"/{OPENSEARCH_INDEX_ALERTS}/_search", method="POST", payload=payload)
+        return jsonify({
+            "hits": [h["_source"] for h in result.get("hits", {}).get("hits", [])],
+            "total": result.get("hits", {}).get("total", {}).get("value", 0),
+            "aggregations": result.get("aggregations", {})
+        })
+    except Exception as exc:
+        return jsonify({"error": "search_failed", "detail": str(exc)}), 500
+
+
+@app.get("/hunting/pivot")
+@require_auth
+def hunting_pivot():
+    """
+    Busca todas as correlações de uma entidade específica (IP ou Usuário).
+    """
+    entity_type = request.args.get("type", "ip") # ip, user
+    value = request.args.get("value")
+    
+    if not value:
+        return jsonify({"error": "missing_value"}), 400
+        
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            if entity_type == "ip":
+                query = "SELECT * FROM alertas WHERE (source_ip = %s OR ip = %s) AND tenant_id = %s ORDER BY ts DESC LIMIT 100"
+                params = (value, value, tenant_id())
+            else:
+                query = "SELECT * FROM alertas WHERE (target_user = %s OR raw_event->>'username' = %s) AND tenant_id = %s ORDER BY ts DESC LIMIT 100"
+                params = (value, value, tenant_id())
+                
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+            alerts = [enrich_alert(row_to_dict(row, cols)) for row in rows]
+            
+            return jsonify({
+                "entity": {"type": entity_type, "value": value},
+                "count": len(alerts),
+                "related_alerts": alerts
+            })
+    finally:
+        conn.close()
+
+
+@app.get("/response/actions")
+@require_auth
+def list_response_actions():
+    """
+    Lista as ações de resposta automática executadas ou simuladas.
+    """
+    REQUEST_COUNTER.labels(endpoint="response_actions").inc()
+    limit, offset = pagination_params(default_limit=50, max_limit=200)
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, action_id, alert_id, tenant_id, action_type, mode, target_entity, reason, status, created_at
+                FROM response_actions
+                WHERE tenant_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (tenant_id(), limit, offset)
+            )
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+            return jsonify({
+                "count": len(rows),
+                "data": [row_to_dict(r, cols) for r in rows]
+            })
+    finally:
+        conn.close()
+
+
+@app.get("/response/actions/<alert_id>")
+@require_auth
+def get_alert_response_actions(alert_id):
+    """
+    Retorna as ações de resposta associadas a um alerta específico.
+    """
+    REQUEST_COUNTER.labels(endpoint="alert_response_actions").inc()
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM response_actions
+                WHERE alert_id = %s AND tenant_id = %s
+                """,
+                (alert_id, tenant_id())
+            )
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+            return jsonify({
+                "alert_id": alert_id,
+                "actions": [row_to_dict(r, cols) for r in rows]
+            })
+    finally:
+        conn.close()
+
+
 @app.get("/ready")
 def ready():
     try:

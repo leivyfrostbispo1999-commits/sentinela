@@ -1,111 +1,66 @@
 rules:
-  - name: ataque_multi_etapa
+  - title: "Ataque Multietapa Detectado"
+    description: "Detecta progressão de Port Scan para Brute Force"
     enabled: true
-    priority: 80
-    description: PORT_SCAN seguido de BRUTE_FORCE dentro da janela temporal.
-    conditions:
-      - PORT_SCAN
-      - BRUTE_FORCE
-    min_risk: 88
-    risk: 88
-    score: 88
-    severity: HIGH
-    mitre_id: T1046
-    mitre_name: Network Service Discovery
-    mitre_tactic: Discovery
-    correlation_key: source_ip
-    action: simulated_block
-    status: ATAQUE MULTIETAPA
+    level: "high"
     tags:
-      - recon
-      - brute_force
-      - critical
+      - "attack.t1046"
+      - "attack.t1110"
+    detection:
+      selection:
+        event_type: ["PORT_SCAN", "BRUTE_FORCE"]
+      condition: "selection"
+    threshold:
+      count: 2
+      timeframe: "300s"
+    action: "simulated_block"
 
-  - name: campanha_hostil
+  - title: "Campanha Hostil de Alta Frequência"
+    description: "Muitos eventos do mesmo IP em curto intervalo"
     enabled: true
-    priority: 70
-    description: Alta frequência de eventos do mesmo IP dentro da janela temporal.
-    threshold: 7
-    window_seconds: 300
-    min_risk: 86
-    risk: 86
-    score: 86
-    severity: HIGH
-    correlation_key: source_ip
-    action: simulated_block
-    status: CAMPANHA HOSTIL
+    level: "high"
     tags:
-      - frequency
-      - campaign
-      - critical
+      - "attack.discovery"
+    detection:
+      selection:
+        event_type: ["ANY"] # ANY é tratado no match_selection se necessário, ou deixamos em branco para pegar tudo
+      condition: "selection"
+    threshold:
+      count: 7
+      timeframe: "300s"
+    action: "simulated_block"
 
-  - name: brute_force_fora_do_padrao
+  - title: "Brute Force em Porta Sensível"
+    description: "Falhas de login em portas administrativas (22, 3389)"
     enabled: true
-    priority: 95
-    description: Múltiplas falhas de login em porta sensível dentro da janela temporal.
-    conditions:
-      - event_type:
-          - BRUTE_FORCE
-          - SSH_FAILED
-        ports:
-          - 22
-          - 3389
-    threshold: 5
-    window_seconds: 300
-    min_risk: 88
-    risk: 88
-    score: 88
-    severity: HIGH
-    mitre_id: T1110
-    mitre_name: Brute Force
-    mitre_tactic: Credential Access
-    correlation_key: source_ip
-    action: simulated_block
-    status: BRUTE FORCE CRÍTICO
+    level: "critical"
     tags:
-      - auth
-      - brute_force
-      - critical
+      - "attack.t1110"
+    logsource:
+      port: [22, 3389]
+    detection:
+      selection:
+        event_type: ["BRUTE_FORCE", "FAILED_LOGIN", "SSH_FAILED"]
+      condition: "selection"
+    threshold:
+      count: 3
+      timeframe: "300s"
+    action: "simulated_block"
 
-  - name: scanner_porta_sensivel
+  - title: "Distributed SSH Brute Force (Sigma-like)"
+    description: "Múltiplos IPs tentando brute force contra o mesmo usuário"
     enabled: true
-    priority: 50
-    description: Varredura em portas sensíveis que costuma anteceder exploração.
-    conditions:
-      - event_type:
-          - PORT_SCAN
-        sensitive_ports: true
-    threshold: 3
-    window_seconds: 300
-    min_risk: 88
-    risk: 88
-    score: 88
-    severity: HIGH
-    mitre_id: T1046
-    mitre_name: Network Service Discovery
-    mitre_tactic: Discovery
-    correlation_key: source_ip
-    action: monitor
-    status: PORT SCAN EM PORTA SENSÍVEL
+    level: "critical"
     tags:
-      - recon
-      - sensitive_port
-      - high
-
-  - name: regra_desativada_exemplo
-    enabled: false
-    priority: 10
-    description: Exemplo mantido para demonstrar governança de regras sem efeito operacional.
-    conditions:
-      - event_type:
-          - NORMAL
-    threshold: 1
-    min_risk: 10
-    score: 10
-    severity: LOW
-    mitre_id:
-    correlation_key: source_ip
-    action: monitor
-    status: REGRA DESATIVADA
-    tags:
-      - example
+      - "attack.credential_access"
+      - "attack.t1110"
+    logsource:
+      service: "ssh"
+    detection:
+      selection:
+        event_type: "FAILED_LOGIN"
+      condition: "selection"
+    threshold:
+      count: 5
+      timeframe: "300s"
+    action: "simulated_block"

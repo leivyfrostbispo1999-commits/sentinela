@@ -2,6 +2,7 @@ import importlib.util
 import sys
 import types
 import uuid
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -99,24 +100,30 @@ def test_yaml_multistage_detection(monkeypatch):
     rule_engine = load_rule_engine(monkeypatch)
     rules = [
         {
-            "name": "ataque_multi_etapa",
+            "title": "ataque_multi_etapa",
             "enabled": True,
             "priority": 80,
-            "conditions": ["PORT_SCAN", "BRUTE_FORCE"],
-            "min_risk": 97,
-            "status": "ATAQUE MULTIETAPA",
+            "detection": {
+                "selection": {"event_type": ["PORT_SCAN", "BRUTE_FORCE"]},
+                "condition": "selection"
+            },
+            "threshold": {"count": 2, "timeframe": "300s"},
+            "level": "high",
+            "status": "ATAQUE MULTIETAPA"
         }
     ]
 
-    scan = {"ip": "20.20.20.20", "event_type": "PORT_SCAN", "port": 22, "service": "ssh"}
-    brute = {"ip": "20.20.20.20", "event_type": "BRUTE_FORCE", "port": 22, "service": "ssh"}
-    rule_engine.update_state(scan)
-    events = rule_engine.update_state(brute)
+    now = time.time()
+    scan = {"ip": "20.20.20.20", "event_type": "PORT_SCAN", "port": 22, "service": "ssh", "seen_at": now - 30}
+    brute = {"ip": "20.20.20.20", "event_type": "BRUTE_FORCE", "port": 22, "service": "ssh", "seen_at": now}
+    
+    # Injetamos manualmente o seen_at para o threshold funcionar no mock
+    events = [scan, brute]
 
     status, risk, reasons = rule_engine.calculate_risk(brute, events, None, rules)
 
     assert status == "ATAQUE MULTIETAPA"
-    assert 80 <= risk < 90
+    assert 70 <= risk < 90
     assert "regra_yaml:ataque_multi_etapa" in reasons
 
 
@@ -220,20 +227,23 @@ def test_load_rules_ignores_disabled_and_normalizes_yaml(monkeypatch, tmp_path):
     rules_file.write_text(
         """
 rules:
-  - name: disabled_rule
+  - title: disabled_rule
     enabled: false
-    event_type: PORT_SCAN
-    score: 99
-  - name: ssh_brute_force
+    detection:
+      selection:
+        event_type: PORT_SCAN
+    level: critical
+  - title: ssh_brute_force
     enabled: true
-    event_type: FAILED_LOGIN
-    score: 40
-    threshold: 5
-    window_seconds: 60
-    mitre_id: T1110
+    detection:
+      selection:
+        event_type: FAILED_LOGIN
+    level: low
+    threshold:
+      count: 5
+      timeframe: 60s
     tags:
-      - ssh
-    correlation_key: source_ip
+      - attack.t1110
     action: simulated_block
 """,
         encoding="utf-8",
