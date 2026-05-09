@@ -11,6 +11,49 @@ O SENTINELA é uma plataforma avançada de detecção e resposta (XDR) potencial
 - **Real ML Engine**: Detecção de anomalias via Isolation Forest (scikit-learn) em tempo real.
 - **Flink CEP**: Complex Event Processing para detecção de sequências multiestágio da Kill Chain.
 
+## 🛠️ Arquitetura Modular (Profiles)
+
+O SENTINELA suporta execução segmentada para otimização de recursos locais.
+
+```text
+📦 SENTINELA PLATFORM
+├── 🔹 CORE (Essencial)
+│   ├── API & Dashboard
+│   ├── Kafka & Redis
+│   └── Rule Engine & Enrichment
+├── 🔸 ANALYTICS (IA & Stream)
+│   ├── Apache Flink
+│   ├── AI Engine (ML Real)
+│   └── UEBA Engine
+├── 🟣 GRAPH (Intelligence)
+│   ├── Neo4j Database
+│   └── Graph Relationship Engine
+└── 🔍 SEARCH (Storage)
+    └── OpenSearch Cold Storage
+```
+
+### Como Iniciar por Módulo (UX Otimizada)
+
+Utilize os scripts automatizados para subir apenas o que você precisa:
+
+```powershell
+# Sobe o essencial (Recomendado para uso diário)
+./scripts/infra/start-sentinela.ps1 -Profile core
+
+# Sobe o ambiente de IA e Stream Processing
+./scripts/infra/start-sentinela.ps1 -Profile analytics
+
+# Sobe o Grafo de Ameaças e XDR Path Analysis
+./scripts/infra/start-sentinela.ps1 -Profile graph
+
+# Sobe o "God Mode" completo (Atenção: Exige 12GB+ RAM)
+./scripts/infra/start-sentinela.ps1 -Profile full
+```
+
+*Nota: Use o parâmetro `-Build` para forçar a reconstrução das imagens.*
+
+---
+
 ## 🛠️ Tecnologias
 - **Data**: Kafka, Apache Flink, Redis.
 - **Storage**: PostgreSQL (Hot), OpenSearch (Cold), Neo4j (Graph).
