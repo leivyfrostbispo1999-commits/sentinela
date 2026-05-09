@@ -21,15 +21,14 @@
 
 ## Agente Ativo
 - **Agente:** Gemini CLI
-- **Status:** Concluído (Distributed Tracing com OpenTelemetry + Jaeger)
+- **Status:** Concluído (Detection DSL Madura - Sigma-like)
 - **Horário de Finalização:** 2026-05-09
 - **Tarefas Realizadas:** 
-  1. **Instrumentação OTel:** Implementada instrumentação distribuída em toda a pipeline Kafka (`log_collector`, `enrichment_worker`, `rule_engine`, `alert_sink`).
-  2. **Propagação de Contexto:** `trace_id` e `span_id` agora são propagados via headers do Kafka, permitindo visão ponta a ponta de cada evento.
-  3. **Infra Jaeger:** Adicionado serviço Jaeger (All-in-One) ao Docker Compose para coleta e visualização de spans via gRPC (porta 4317).
-  4. **Correção de Schema:** Corrigida inconsistência no banco de dados Postgres (colunas de enriquecimento JSONB faltantes).
-  5. **Estabilização:** Resolvido bug de sintaxe no Rule Engine e otimizado o loop de consumo para suportar a latência da exportação de traces.
-  6. **Validação:** Confirmado status `healthy` em todos os serviços e Jaeger pronto para consulta.
+  1. **Sigma Parser:** Desenvolvido o `SigmaRuleCompiler` em `dsl_parser.py`, suportando operadores booleanos (`and`, `or`, `not`), agregações (`1 of selection*`) e modificadores de campo (`contains`, `re`, `endswith`).
+  2. **Refatoração do Engine:** O motor de regras agora compila o YAML na inicialização e aplica a lógica Sigma de forma nativa e segura.
+  3. **Playbooks Sigma:** Atualizado `sentinela_rules.yml` com regras reais usando seleções nomeadas e condições booleanas complexas.
+  4. **Correção de Bugs:** Resolvida inconsistência em `mitre_for_event` que causava `TypeError` após a mudança de tipos de dados das regras.
+  5. **Resiliência:** Executado novo procedimento de recuperação forçada do Docker Desktop para estabilizar o broker Kafka sob alta carga de tracing.
 - **Arquivos Travados:** Nenhum.
 
 ## Histórico de Tarefas Recentes

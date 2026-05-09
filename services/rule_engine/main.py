@@ -24,6 +24,7 @@ from threat_intel import check_ioc, check_ip
 from correlation_engine import CorrelationEngine
 from response_engine import ResponseEngine
 from tracing_helper import setup_tracing, extract_context, inject_context
+from dsl_parser import SigmaRuleCompiler
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -411,132 +412,50 @@ RESPONSE_ENGINE = ResponseEngine(STATE_STORE)
 
 
 def load_rules():
-    fallback = {
-        "rules": [
-            {
-                "title": "port_scan", 
-                "description": "Detecta varredura de portas", 
-                "enabled": True, 
-                "priority": 20, 
-                "detection": {"selection": {"event_type": "PORT_SCAN"}, "condition": "selection"},
-                "level": "LOW", 
-                "tags": ["attack.t1046"], 
-                "action": "monitor"
-            },
-            {
-                "title": "ssh_brute_force", 
-                "description": "Detecta múltiplas falhas de login SSH", 
-                "enabled": True, 
-                "priority": 40, 
-                "detection": {"selection": {"event_type": "FAILED_LOGIN"}, "condition": "selection"},
-                "threshold": {"count": 5, "timeframe": "60s"},
-                "level": "HIGH", 
-                "tags": ["ssh", "attack.t1110"], 
-                "action": "simulated_block"
-            },
-            {
-                "title": "brute_force", 
-                "description": "Detecta padrão explícito de brute force", 
-                "enabled": True, 
-                "priority": 45, 
-                "detection": {"selection": {"event_type": "BRUTE_FORCE"}, "condition": "selection"},
-                "threshold": {"count": 3, "timeframe": "60s"},
-                "level": "HIGH", 
-                "tags": ["attack.t1110"], 
-                "action": "simulated_block"
-            },
-            {
-                "title": "ioc_match", 
-                "description": "Detecta correspondência com IOC local", 
-                "enabled": True, 
-                "priority": 90, 
-                "detection": {"selection": {"event_type": "IOC_MATCH"}, "condition": "selection"},
-                "level": "CRITICAL", 
-                "tags": ["ioc", "attack.t1071"], 
-                "action": "simulated_block"
-            },
-            {
-                "title": "ataque_multi_etapa", 
-                "enabled": True, 
-                "priority": 80, 
-                "detection": {"selection": {"event_type": ["PORT_SCAN", "BRUTE_FORCE"]}, "condition": "selection"},
-                "threshold": {"count": 2, "timeframe": "300s"},
-                "level": "HIGH", 
-                "status": "ATAQUE MULTIETAPA", 
-                "tags": ["fallback"]
-            },
-            {
-                "title": "campanha_hostil", 
-                "enabled": True, 
-                "priority": 70, 
-                "threshold": {"count": 7, "timeframe": "300s"},
-                "detection": {"selection": {"event_type": "ANY"}, "condition": "selection"},
-                "level": "HIGH", 
-                "status": "CAMPANHA HOSTIL", 
-                "tags": ["fallback"]
-            },
-        ]
-    }
-
-    def normalize_rules(rules):
-        normalized = []
-        for rule in rules:
-            if not isinstance(rule, dict):
-                continue
-            if rule.get("enabled", True) is False:
-                continue
-                
-            # Mapeamento DSL -> Interno
-            name = rule.get("title") or rule.get("name")
-            if not name:
-                continue
-                
-            level = str(rule.get("level") or rule.get("severity") or "low").upper()
-            score_map = {"CRITICAL": 95, "HIGH": 75, "MEDIUM": 50, "LOW": 25, "INFORMATIONAL": 10}
-            score = rule.get("score") or score_map.get(level, 25)
-            
-            # Extração de MITRE das tags (ex: attack.t1110)
-            mitre_id = rule.get("mitre_id")
-            tags = rule.get("tags") or []
-            if not mitre_id:
-                for tag in tags:
-                    if "attack.t" in tag.lower():
-                        mitre_id = tag.split(".")[-1].upper()
-                        break
-
-            normalized.append({
-                **rule,
-                "name": name,
-                "score": int(score),
-                "severity": level,
-                "mitre_id": mitre_id,
-                "window_seconds": int(str(rule.get("window_seconds", "300")).replace("s", "")),
-                "action": rule.get("action", "monitor"),
-            })
-        return normalized
-
-    if yaml is None:
-        log_json("WARN", "PyYAML indisponível; usando regras internas")
-        return normalize_rules(fallback["rules"])
+    fallback_rules = [
+        {"title": "port_scan", "detection": {"selection": {"event_type": "PORT_SCAN"}}, "level": "LOW"},
+        {"title": "brute_force", "detection": {"selection": {"event_type": "BRUTE_FORCE"}}, "level": "HIGH"},
+    ]
 
     candidates = unique_preserve_order([RULES_PATH, Path("rules.yaml"), Path("sentinela_rules.yml")])
+    raw_rules = []
     try:
         for candidate in candidates:
-            if not candidate.exists():
-                continue
-            with candidate.open("r", encoding="utf-8") as file:
-                ruleset = yaml.safe_load(file) or fallback
-                rules = [rule for rule in ruleset.get("rules", []) if isinstance(rule, dict)]
-                normalized = normalize_rules(rules)
-                if not normalized:
-                    log_json("WARN", "YAML sem regras válidas; usando regras internas", path=str(candidate))
-                    return normalize_rules(fallback["rules"])
-                log_json("INFO", "Regras YAML carregadas", path=str(candidate), total_rules=len(normalized))
-                return normalized
-    except Exception as exc:
-        log_json("WARN", "Falha ao carregar YAML; usando regras internas", error=str(exc))
-    log_json("WARN", "Arquivo YAML não encontrado; usando regras internas", path=str(RULES_PATH))
-    return normalize_rules(fallback["rules"])
+            if not candidate.exists(): continue
+            with candidate.open("r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+                raw_rules = data.get("rules", [])
+                if raw_rules: break
+    except Exception as e:
+        log_json("WARN", "Erro ao carregar regras YAML", error=str(e))
+    
+    if not raw_rules:
+        raw_rules = fallback_rules
+
+    compiled_rules = []
+    for r in raw_rules:
+        try:
+            compiler = SigmaRuleCompiler(r)
+            compiled_rules.append(compiler)
+        except Exception as e:
+            log_json("ERROR", "Erro ao compilar regra", rule=r.get("title"), error=str(e))
+    
+    log_json("INFO", "Regras Sigma compiladas", count=len(compiled_rules))
+    return compiled_rules
+
+
+def apply_yaml_rules(events, compiled_rules):
+    matches = []
+    log = events[-1] if events else {}
+    
+    for compiler in compiled_rules:
+        try:
+            if compiler.match(log):
+                matches.append(compiler.rule)
+        except Exception as e:
+            log_json("ERROR", "Erro ao aplicar regra Sigma", rule=compiler.title, error=str(e))
+            
+    return sorted(matches, key=lambda item: int(item.get("priority", 0)), reverse=True)
 
 
 def normalize_event_type(log):
@@ -552,10 +471,11 @@ try:
 except ImportError:
     from services.rule_engine.mitre_utils import get_mitre_mapping, get_technique_details
 
-def mitre_for_event(event_type, status=None, threat_match=None, simulated_block=False, rules=None):
-    rules = rules or []
+def mitre_for_event(event_type, status=None, threat_match=None, simulated_block=False, compiled_rules=None):
+    compiled_rules = compiled_rules or []
     event_key = normalize_mitre_key(event_type)
-    for rule in rules:
+    for compiler in compiled_rules:
+        rule = compiler.rule
         if rule.get("enabled", True) is False:
             continue
         mitre_id = str(rule.get("mitre_id") or "").upper()
@@ -713,67 +633,6 @@ def match_selection(log, selection):
             if str(log_value).upper() != str(value).upper():
                 return False
     return True
-
-
-def apply_yaml_rules(events, rules):
-    matches = []
-    log = events[-1] if events else {}
-    
-    for rule in rules:
-        if rule.get("enabled", True) is False:
-            continue
-
-        # 1. Filtro por Logsource (Otimização)
-        logsource = rule.get("logsource", {})
-        if logsource:
-            mismatch = False
-            for field, value in logsource.items():
-                log_value = log.get(field)
-                if isinstance(value, list):
-                    if str(log_value).upper() not in [str(v).upper() for v in value]:
-                        mismatch = True
-                        break
-                elif str(log_value).upper() != str(value).upper():
-                    mismatch = True
-                    break
-            if mismatch:
-                continue
-
-        # 2. Avaliação de Detection
-        detection = rule.get("detection", {})
-        if not detection:
-            continue
-            
-        # Simplificação: suporte apenas a uma seleção nomeada por enquanto
-        # Para Sigma completo, precisaríamos de um parser de expressões booleanas
-        selections = {k: v for k, v in detection.items() if k != "condition"}
-        condition_str = detection.get("condition", "")
-        
-        matched_selection = False
-        for sel_name, sel_body in selections.items():
-            if match_selection(log, sel_body):
-                matched_selection = True
-                break
-        
-        if not matched_selection:
-            continue
-
-        # 3. Avaliação de Threshold/Aggregation
-        threshold = rule.get("threshold", {})
-        if threshold:
-            timeframe = int(str(threshold.get("timeframe", "300")).replace("s", ""))
-            count_needed = int(threshold.get("count", 1))
-            
-            now = time.time()
-            scoped_events = [e for e in events if now - e["seen_at"] <= timeframe]
-            
-            # Se a regra for de threshold, precisamos que o count seja atingido
-            if len(scoped_events) < count_needed:
-                continue
-
-        matches.append(rule)
-
-    return sorted(matches, key=lambda item: int(item.get("priority", 0)), reverse=True)
 
 
 def build_correlation(events, log):
@@ -1200,7 +1059,7 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
 
     aggregation_key = alert_aggregation_key(base_alert)
     aggregate_state = STATE_STORE.record_aggregate(aggregation_key, status, base_alert)
-    mitre = mitre_for_event(event_type, status=status, threat_match=threat_intel_match, simulated_block=simulated_block, rules=rules)
+    mitre = mitre_for_event(event_type, status=status, threat_match=threat_intel_match, simulated_block=simulated_block, compiled_rules=rules)
     matched_rule = (score_breakdown.get("matched_rules") or [None])[0] or {}
     target = target_context(log, port, service)
     response = response_plan(risk, threat_intel_match, simulated_block)
@@ -1357,7 +1216,6 @@ def process_log(log, producer, rules):
     # Nova Correlation Engine
     correlation_data = CORRELATION_ENGINE.correlate(log, events, threat)
     
-    RULES_EXECUTED.inc(len(rules or []))
     status, risk, risk_reasons = calculate_risk(log, events, threat, rules)
     
     # Mesclar razões de correlação

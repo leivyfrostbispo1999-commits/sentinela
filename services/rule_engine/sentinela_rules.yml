@@ -1,79 +1,64 @@
 rules:
-  - name: port_scan
-    description: Detecta varredura de portas contra servicos expostos.
+  - title: "Port Scanning Detected"
+    description: "Detecta varredura de portas contra ativos do laboratório."
     enabled: true
-    event_type: PORT_SCAN
-    threshold: 3
-    window_seconds: 60
-    score: 25
-    severity: LOW
-    mitre_id: T1046
-    mitre_name: Network Service Discovery
-    mitre_tactic: Discovery
+    logsource:
+      product: "sentinela-xdr"
+    detection:
+      selection:
+        event_type: "PORT_SCAN"
+      condition: "selection"
+    level: "LOW"
+    priority: 20
     tags:
-      - reconnaissance
-      - network
-    correlation_key: source_ip
-    action: monitor
+      - "attack.t1046"
 
-  - name: ssh_brute_force
-    description: Detecta multiplas falhas de login SSH em curto intervalo.
+  - title: "Brute Force Attack"
+    description: "Detecta múltiplas tentativas de autenticação falhas."
     enabled: true
-    event_type: FAILED_LOGIN
-    threshold: 5
-    window_seconds: 60
-    score: 40
-    severity: HIGH
-    mitre_id: T1110
-    mitre_name: Brute Force
-    mitre_tactic: Credential Access
+    detection:
+      selection:
+        event_type: "BRUTE_FORCE"
+      condition: "selection"
+    level: "HIGH"
+    priority: 45
     tags:
-      - ssh
-      - credential_access
-    correlation_key: source_ip
-    action: simulated_block
+      - "attack.t1110"
 
-  - name: brute_force
-    description: Detecta evento explicito de brute force.
+  - title: "Suspicious API Call via Regex"
+    description: "Detecta chamadas de API perigosas usando modificadores de regex."
     enabled: true
-    event_type: BRUTE_FORCE
-    threshold: 3
-    window_seconds: 60
-    score: 40
-    severity: HIGH
-    mitre_id: T1110
-    mitre_name: Brute Force
-    mitre_tactic: Credential Access
+    detection:
+      selection:
+        api_call|re: "^(DeleteLogGroup|CreateUser|DisableLogging)$"
+      condition: "selection"
+    level: "MEDIUM"
+    priority: 35
     tags:
-      - credential_access
-    correlation_key: source_ip
-    action: simulated_block
+      - "attack.t1071"
 
-  - name: ioc_match
-    description: Detecta correspondencia com IOC local controlado.
+  - title: "Multi-Stage Attack (Sigma Style)"
+    description: "Detecta a progressão de um ataque combinando múltiplas seleções."
     enabled: true
-    event_type: IOC_MATCH
-    threshold: 1
-    window_seconds: 300
-    score: 85
-    severity: CRITICAL
-    mitre_id: T1071
-    mitre_name: Application Layer Protocol
-    mitre_tactic: Command and Control
+    detection:
+      selection_recon:
+        event_type: "PORT_SCAN"
+      selection_access:
+        event_type: ["BRUTE_FORCE", "FAILED_LOGIN"]
+      condition: "selection_recon and selection_access"
+    level: "HIGH"
+    priority: 80
     tags:
-      - ioc
-      - threat_intel
-    correlation_key: source_ip
-    action: simulated_block
+      - "attack.progression"
 
-  - name: disabled_example
-    description: Exemplo seguro de regra desabilitada ignorada pelo engine.
-    enabled: false
-    event_type: TEST_ONLY
-    score: 0
-    severity: LOW
-    mitre_id:
+  - title: "Critical IOC Domain"
+    description: "Detecta tráfego para domínios maliciosos conhecidos via sufixo."
+    enabled: true
+    detection:
+      selection:
+        target_host|endswith: ".onion"
+      condition: "selection"
+    level: "CRITICAL"
+    priority: 95
     tags:
-      - example
-    correlation_key: source_ip
-    action: monitor
+      - "attack.t1071"
