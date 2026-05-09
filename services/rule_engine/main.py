@@ -348,15 +348,23 @@ class RedisCorrelationStore:
     def _select_db(self):
         self._execute("PING")
 
-    def add_event(self, ip, event):
-        key = f"{self.key_prefix}{ip}"
-        now = event["seen_at"]
-        raw_events = self._execute("GET", key)
-        events = json.loads(raw_events) if raw_events else []
-        events = [item for item in events if now - float(item.get("seen_at", 0)) <= self.window_seconds]
-        events.append(event)
-        self._execute("SET", key, json.dumps(events, ensure_ascii=False), "EX", self.window_seconds * 2)
-        return events
+    def add_event(self, identifier, event):
+        """Usa ZSET para histórico temporal eficiente."""
+        key = f"sentinela:history:{identifier}"
+        now = float(event.get("seen_at", time.time()))
+        event_payload = json.dumps(event, ensure_ascii=False)
+        
+        self._execute("ZADD", key, now, event_payload)
+        self._execute("ZREMRANGEBYSCORE", key, "-inf", now - self.window_seconds)
+        self._execute("EXPIRE", key, self.window_seconds * 2)
+        
+        raw_events = self._execute("ZRANGE", key, 0, -1)
+        return [json.loads(e) for e in raw_events] if raw_events else []
+
+    def get_full_session(self, identifier):
+        key = f"sentinela:history:{identifier}"
+        raw_events = self._execute("ZRANGE", key, 0, -1)
+        return [json.loads(e) for e in raw_events] if raw_events else []
 
     def record_aggregate(self, aggregation_key, status, alert):
         key = f"{self.aggregate_prefix}{aggregation_key}"
@@ -597,15 +605,23 @@ def normalize_port(port):
 
 def update_state(log):
     ip = normalize_source_ip(log)
+    campaign_id = log.get("campaign_id")
+    identifier = campaign_id if campaign_id else ip
+    
     now = time.time()
     current = {
         "seen_at": now,
+        "event_id": log.get("event_id"),
         "event_type": normalize_event_type(log),
         "port": normalize_port(log.get("port")),
         "service": str(log.get("service") or "unknown").upper(),
         "username": normalize_username(log.get("username") or log.get("user")),
+        "tactic": log.get("tactic"),
+        "technique": log.get("technique"),
+        "campaign_id": campaign_id,
+        "campaign_name": log.get("campaign_name")
     }
-    return STATE_STORE.add_event(ip, current)
+    return STATE_STORE.add_event(identifier, current)
 
 
 def event_type_matches(item_event_type, condition):
@@ -1262,11 +1278,12 @@ def create_consumer():
             consumer = KafkaConsumer(
                 RAW_LOGS_TOPIC,
                 bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-                group_id="rule-engine-live",
+                group_id=f"rule-engine-stable-{uuid.uuid4().hex[:8]}",
                 auto_offset_reset="latest",
                 enable_auto_commit=True,
                 max_poll_records=PIPELINE_MAX_BATCH_SIZE,
-                consumer_timeout_ms=PIPELINE_CONSUMER_TIMEOUT_MS,
+                session_timeout_ms=30000,
+                heartbeat_interval_ms=10000,
                 value_deserializer=lambda message: json.loads(message.decode("utf-8")),
             )
             log_json("INFO", "Kafka conectado", topic=RAW_LOGS_TOPIC)

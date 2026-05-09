@@ -60,6 +60,10 @@ class CorrelationEngine:
         target_ip = log.get("target_ip") or log.get("destination_ip") or "unknown"
         username = log.get("username") or log.get("user") or "unknown"
         
+        # Atributos de Campanha Explícita (Simulator)
+        explicit_campaign_id = log.get("campaign_id")
+        explicit_campaign_name = log.get("campaign_name")
+        
         reasons = []
         distributed_attack = False
         source_count = 1
@@ -67,34 +71,41 @@ class CorrelationEngine:
         
         # 1. Attack Graph / Kill Chain Engine
         tactics_seen = set()
+        techniques_seen = set()
         highest_phase = 0
         kill_chain_path = []
         
         for e in events:
             etype = e.get("event_type", "UNKNOWN").upper()
             mapping = get_mitre_mapping(etype)
-            if mapping.get("id"):
-                tactic = mapping["tactic"]
-                if tactic not in tactics_seen:
-                    tactics_seen.add(tactic)
-                    phase = KILL_CHAIN_PHASES.get(tactic, 0)
-                    kill_chain_path.append({
-                        "tactic": tactic, 
-                        "phase": phase, 
-                        "phase_name": PHASE_NAMES.get(phase, "other"),
-                        "timestamp": e.get("seen_at", time.time())
-                    })
-                    if phase > highest_phase:
-                        highest_phase = phase
+            
+            # Prioriza técnica vinda do log (campanha explícita)
+            tech = e.get("technique") or mapping.get("name")
+            tactic = e.get("tactic") or mapping.get("tactic")
+            
+            if tactic and tactic not in tactics_seen:
+                tactics_seen.add(tactic)
+                phase = KILL_CHAIN_PHASES.get(tactic, 0)
+                kill_chain_path.append({
+                    "tactic": tactic, 
+                    "technique": tech,
+                    "phase": phase, 
+                    "phase_name": PHASE_NAMES.get(phase, "other"),
+                    "timestamp": e.get("seen_at", time.time())
+                })
+                if phase > highest_phase:
+                    highest_phase = phase
+            if tech:
+                techniques_seen.add(tech)
         
         kill_chain_path = sorted(kill_chain_path, key=lambda x: x["timestamp"])
         path_tactics = [item["tactic"] for item in kill_chain_path]
 
         mapping = get_mitre_mapping(event_type)
-        current_tactic = mapping.get("tactic") if mapping.get("id") else None
+        current_tactic = log.get("tactic") or mapping.get("tactic")
         current_phase = KILL_CHAIN_PHASES.get(current_tactic, 0) if current_tactic else 0
 
-        if current_tactic and current_tactic not in tactics_seen and tactics_seen:
+        if current_tactic and tactics_seen and current_tactic not in tactics_seen:
             reasons.append(f"tactical_progression:from_{path_tactics[-1]}_to_{current_tactic}")
         
         if current_phase > 0 and current_phase > highest_phase:
@@ -130,28 +141,29 @@ class CorrelationEngine:
         if not distributed_attack:
             campaign_seed += f":ip:{ip}"
         
-        campaign_id = "CMP-" + hashlib.md5(campaign_seed.encode()).hexdigest()[:8].upper()
+        # Se houver campanha explícita, usamos o ID dela, senão geramos um
+        campaign_id = explicit_campaign_id or ("CMP-" + hashlib.md5(campaign_seed.encode()).hexdigest()[:8].upper())
+        
+        if explicit_campaign_id:
+            reasons.append(f"explicit_campaign_emulation:{explicit_campaign_name}")
 
         # 2.C Tenant-Level Coordinated Activity
         tenant_key = f"sentinela:correlation:tenant:{tenant_id}:suspicious_events"
         tenant_count = self.state_store.increment_counter(tenant_key, self.window_seconds)
         if tenant_count >= TENANT_VOLUME_HIGH:
             reasons.append(f"tenant_high_volume:{tenant_count}")
-        elif tenant_count >= TENANT_VOLUME_MEDIUM:
-            reasons.append(f"tenant_medium_volume:{tenant_count}")
 
-        # 3. Volume de Eventos (Single IP)
+        # 3. Volume de Eventos (Single Session)
         if len(events) >= 10:
-            reasons.append("high_volume_detected")
+            reasons.append("high_session_volume")
         elif len(events) >= 5:
-            reasons.append("medium_volume_detected")
+            reasons.append("medium_session_volume")
 
         # 4. Score de Risco da Campanha
-        # Baseado em volume, diversidade de táticas e fase da kill chain
         risk_score = 10 # Base
-        risk_score += (highest_phase * 10)
+        risk_score += (highest_phase * 8)
         risk_score += (len(involved_sources) * 5)
-        risk_score += (len(tactics_seen) * 5)
+        risk_score += (len(tactics_seen) * 7)
         risk_score = min(100, risk_score)
 
         if threat_intel:
@@ -161,9 +173,11 @@ class CorrelationEngine:
         return {
             "correlation_id": str(uuid.uuid4()),
             "campaign_id": campaign_id,
+            "campaign_name": explicit_campaign_name,
             "reasons": reasons,
             "tactics_seen": list(tactics_seen),
-            "correlation_type": correlation_type,
+            "techniques_seen": list(techniques_seen),
+            "correlation_type": "campaign" if tactics_seen else correlation_type,
             "distributed_attack": distributed_attack,
             "source_count": source_count,
             "involved_sources": involved_sources,
@@ -174,5 +188,11 @@ class CorrelationEngine:
                 "current_phase_name": PHASE_NAMES.get(current_phase, "other"),
                 "current_tactic": current_tactic,
                 "path": kill_chain_path
+            },
+            "session_summary": {
+                "event_count": len(events),
+                "first_seen": events[0].get("seen_at") if events else time.time(),
+                "last_seen": events[-1].get("seen_at") if events else time.time(),
+                "duration_seconds": (events[-1].get("seen_at", 0) - events[0].get("seen_at", 0)) if len(events) > 1 else 0
             }
         }

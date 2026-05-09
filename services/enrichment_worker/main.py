@@ -102,7 +102,7 @@ class EnrichmentWorker:
         consumer = KafkaConsumer(
             RAW_LOGS_TOPIC,
             bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-            group_id="enrichment-group-v1",
+            group_id="enrichment-group-temporal-v2",
             auto_offset_reset="latest",
             value_deserializer=lambda m: json.loads(m.decode("utf-8"))
         )
@@ -111,6 +111,7 @@ class EnrichmentWorker:
         for message in consumer:
             try:
                 raw_log = message.value
+                print(f"Processando evento: {raw_log.get('event_id')} do IP {raw_log.get('ip')}")
                 enriched_log = self.enrich(raw_log)
                 self.producer.send(ENRICHED_LOGS_TOPIC, enriched_log)
                 self.producer.flush()

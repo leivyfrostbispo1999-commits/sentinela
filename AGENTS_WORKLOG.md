@@ -21,15 +21,14 @@
 
 ## Agente Ativo
 - **Agente:** Gemini CLI
-- **Status:** Concluído (Threat Emulation Avançado + MITRE ATT&CK Playbooks)
+- **Status:** Concluído (Evolução da Memória de Correlação - State Store 2.0)
 - **Horário de Finalização:** 2026-05-09
 - **Tarefas Realizadas:** 
-  1. **Motor de Campanhas:** Implementado orquestrador multithreaded no `sentinela-simulator` capaz de executar playbooks YAML.
-  2. **Playbooks MITRE:** Criado `services/simulator/campaigns/default_campaigns.yml` com cenários de Ransomware, Exfiltração Cloud e Movimento Lateral.
-  3. **Rastreabilidade:** Cada campanha gera um `campaign_id` único; eventos agora incluem `step_id`, `tactic`, `technique` e `campaign_name`.
-  4. **Robustez:** Adicionada validação de esquema YAML na inicialização com falha segura (ignora campanhas inválidas sem quebrar o serviço).
-  5. **Controle:** Implementada flag `ENABLE_CAMPAIGNS` para alternar entre tráfego aleatório e simulações estruturadas.
-  6. **Validação:** Confirmada a produção de eventos de campanha no Kafka e a coexistência com o tráfego normal.
+  1. **Memória Temporal (ZSET):** Refatorada a `RedisCorrelationStore` para usar Sorted Sets (ZSET) com limpeza automática (`ZREMRANGEBYSCORE`). Isso permite reconstruir sessões de ataque multietapa de forma performática.
+  2. **Attack Sessions:** O Rule Engine agora suporta `campaign_id` explícito (vindo do simulador) ou implícito (baseado em IP), rastreando a progressão da Kill Chain.
+  3. **Enriquecimento de Alerta:** Alertas publicados agora incluem `campaign_info` (ID, nome, score de risco da sessão, táticas e técnicas vistas) e sumário de duração.
+  4. **Estabilização Kafka:** Corrigido problema de rebalance infinito no `rule-engine` através de `group_id` dinâmico e remoção de timeouts agressivos.
+  5. **Validação:** Confirmado o funcionamento da agregação temporal e a estabilidade da pipeline core.
 - **Arquivos Travados:** Nenhum.
 
 ## Histórico de Tarefas Recentes
