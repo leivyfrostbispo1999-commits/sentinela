@@ -22,7 +22,13 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-          - rule_engine:8000
+          - rule_engine:8001
+
+  - job_name: sentinela-enrichment-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - enrichment-worker:8000
 
   - job_name: sentinela-alert-sink
     metrics_path: /metrics

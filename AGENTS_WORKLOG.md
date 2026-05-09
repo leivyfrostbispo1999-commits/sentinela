@@ -21,13 +21,15 @@
 
 ## Agente Ativo
 - **Agente:** Gemini CLI
-- **Status:** Concluído (Correção de Conectividade Docker Hub)
+- **Status:** Concluído (Integração de Observabilidade + Core Hardening)
 - **Horário de Finalização:** 2026-05-09
 - **Tarefas Realizadas:** 
-  1. Realizada limpeza do builder (`docker builder prune`).
-  2. Pull manual das imagens base (`nginx:alpine`, `python:3.11-slim`) realizado com sucesso.
-  3. Perfil `core` submetido e construído com sucesso (`docker compose --profile core up -d --build`).
-  4. Todos os 21 serviços do perfil core estão operacionais.
+  1. **Hardening Core:** Implementados limites de recursos (RAM/CPU) e healthchecks para `rule_engine`, `enrichment-worker` e `lifecycle-worker`.
+  2. **Métricas:** `enrichment-worker` atualizado para expor métricas Prometheus e endpoint de saúde na porta 8000. `rule_engine` configurado para porta 8001.
+  3. **Prometheus:** `prometheus.yml` atualizado para coletar métricas dos novos workers.
+  4. **Grafana:** Dashboard `sentinela-operational-maturity.json` atualizado com 4 novos painéis (vazão, latência p95, alertas e erros de pipeline).
+  5. **Resiliência:** Executada recuperação forçada do Docker Desktop/WSL após falha de engine (Internal Error 500).
+  6. **Validação:** Confirmado status `healthy` em todos os 21 serviços e acessibilidade dos endpoints de métricas via rede interna.
 - **Arquivos Travados:** Nenhum.
 
 ## Histórico de Tarefas Recentes

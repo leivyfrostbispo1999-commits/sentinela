@@ -6,7 +6,7 @@ import random
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from kafka import KafkaConsumer, KafkaProducer
-from prometheus_client import Counter, Histogram, start_http_server
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
@@ -37,9 +37,18 @@ class OpsHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"OK")
+        elif self.path == "/metrics":
+            data = generate_latest(REGISTRY)
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(data)
         else:
             self.send_response(404)
             self.end_headers()
+
+    def log_message(self, *args):
+        return
 
 class EnrichmentWorker:
     def __init__(self):
