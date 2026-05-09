@@ -23,6 +23,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, G
 from threat_intel import check_ioc, check_ip
 from correlation_engine import CorrelationEngine
 from response_engine import ResponseEngine
+from tracing_helper import setup_tracing, extract_context, inject_context
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -35,7 +36,6 @@ MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "15"))
 PIPELINE_MAX_RETRIES = int(os.getenv("PIPELINE_MAX_RETRIES", "3"))
 PIPELINE_RETRY_BACKOFF_MS = int(os.getenv("PIPELINE_RETRY_BACKOFF_MS", "500"))
 PIPELINE_MAX_BATCH_SIZE = int(os.getenv("PIPELINE_MAX_BATCH_SIZE", "100"))
-PIPELINE_CONSUMER_TIMEOUT_MS = int(os.getenv("PIPELINE_CONSUMER_TIMEOUT_MS", "1000"))
 PIPELINE_POLL_INTERVAL_MS = int(os.getenv("PIPELINE_POLL_INTERVAL_MS", "250"))
 RULES_PATH = Path(os.getenv("RULES_PATH", "sentinela_rules.yml"))
 
@@ -93,6 +93,9 @@ SEVERITY_PRIORITY = {
     "BRUTE FORCE CRITICO": 4,
     "BRUTE FORCE CRÍTICO": 4,
 }
+
+# Tracing
+TRACER = setup_tracing()
 
 threat_cache = {}
 
@@ -248,13 +251,16 @@ class InMemoryCorrelationStore:
         self.global_sets = defaultdict(lambda: {})  # {key: {value: timestamp}}
         self.global_counters = defaultdict(lambda: deque()) # {key: deque([timestamps])}
 
-    def add_event(self, ip, event):
+    def add_event(self, identifier, event):
         now = event["seen_at"]
-        events = self.ip_events[ip]
+        events = self.ip_events[identifier]
         while events and now - events[0]["seen_at"] > self.window_seconds:
             events.popleft()
         events.append(event)
         return list(events)
+
+    def get_full_session(self, identifier):
+        return list(self.ip_events[identifier])
 
     def record_aggregate(self, aggregation_key, status, alert):
         now = float(alert["seen_at"])
@@ -1263,7 +1269,15 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
         "involved_sources": correlation_data.get("involved_sources", [source_ip]),
         "confidence": correlation_data.get("confidence", "medium"),
         "recommendation": correlation_data.get("recommendation"),
-        "kill_chain": correlation_data.get("kill_chain", {})
+        "kill_chain": correlation_data.get("kill_chain", {}),
+        "campaign_info": {
+            "id": correlation_data.get("campaign_id"),
+            "name": correlation_data.get("campaign_name"),
+            "risk_score": correlation_data.get("risk_score"),
+            "tactics": correlation_data.get("tactics_seen", []),
+            "techniques": correlation_data.get("techniques_seen", []),
+            "session_summary": correlation_data.get("session_summary")
+        }
     }
     alert["human_summary"] = human_summary_for_alert(alert)
     alert["explanation"] = alert["human_summary"]
@@ -1375,7 +1389,12 @@ def process_log(log, producer, rules):
                 "tactic": mitre_map["tactic"]
             })
     
-    producer.send(ALERTS_TOPIC, alert)
+    # Distributed Tracing Context Injection
+    headers = {}
+    inject_context(headers)
+    kafka_headers = [(k, v.encode("utf-8")) for k, v in headers.items()]
+    
+    producer.send(ALERTS_TOPIC, alert, headers=kafka_headers)
     producer.flush(timeout=2)
     ALERTS_PUBLISHED.inc()
     if alert.get("alert_type") in {"incident_candidate", "campaign"} or int(alert.get("score_final") or 0) >= 70:
@@ -1405,6 +1424,7 @@ def process_log(log, producer, rules):
         correlation_key=alert["correlation_key"],
         tenant_id=alert.get("tenant_id"),
         correlation_id=alert.get("correlation_id"),
+        campaign_id=alert.get("campaign_id"),
     )
 
 
@@ -1464,11 +1484,15 @@ def run():
             consumer = create_consumer()
             producer = create_producer()
             for message in consumer:
-                process_log_with_retry(message.value, producer, rules)
+                # Extrai contexto para Distributed Tracing
+                ctx = extract_context(message.headers)
+                with TRACER.start_as_current_span("process_event", context=ctx) as span:
+                    span.set_attribute("event_id", (message.value or {}).get("event_id"))
+                    process_log_with_retry(message.value, producer, rules)
             time.sleep(PIPELINE_POLL_INTERVAL_MS / 1000)
         except Exception as exc:
             SERVICE_FAILURES.labels(service="rule_engine").inc()
-            log_json("ERROR", "Erro no loop do Rule Engine; reconectando", error=str(exc))
+            log_json("ERROR", "Erro crítico no loop do Rule Engine; reconectando", error=str(exc))
             time.sleep(backoff_delay(0))
 
 

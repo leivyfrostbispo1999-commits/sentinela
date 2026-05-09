@@ -432,6 +432,23 @@ services:
     mem_limit: 384m
     cpus: "0.50"
 
+  # --- OBSERVABILITY ---
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: sentinela-jaeger
+    profiles: ["core", "full"]
+    restart: unless-stopped
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks:
+      - sentinela-net
+    mem_limit: 512m
+    cpus: "0.50"
+
   prometheus:
     image: prom/prometheus:v2.52.0
     container_name: sentinela-prometheus

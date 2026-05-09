@@ -10,6 +10,7 @@ from threading import Thread
 
 from kafka import KafkaProducer
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
+from tracing_helper import setup_tracing, inject_context
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -25,6 +26,8 @@ LOGS_DISCARDED = Counter("sentinela_log_collector_logs_discarded_total", "Logs d
 INGESTION_EVENTS = Counter("sentinela_log_collector_ingestion_events_total", "Eventos publicados para o Kafka")
 SERVICE_FAILURES = Counter("sentinela_service_failures_total", "Falhas por serviço", ["service"])
 SERVICE_READY_GAUGE = Gauge("sentinela_service_ready", "Readiness do serviço", ["service"])
+
+TRACER = setup_tracing()
 
 IPS = [
     "192.168.1.45",
@@ -146,8 +149,18 @@ def run():
 
         try:
             LOGS_RECEIVED.inc()
-            producer.send(RAW_LOGS_TOPIC, event)
-            producer.flush(timeout=2)
+            with TRACER.start_as_current_span("ingest_event") as span:
+                span.set_attribute("event_id", event["event_id"])
+                span.set_attribute("ip", event["ip"])
+                span.set_attribute("event_type", event["event_type"])
+                
+                headers = {}
+                inject_context(headers)
+                kafka_headers = [(k, v.encode("utf-8")) for k, v in headers.items()]
+                
+                producer.send(RAW_LOGS_TOPIC, event, headers=kafka_headers)
+                producer.flush(timeout=2)
+                
             INGESTION_EVENTS.inc()
             log_json(
                 "INFO",

@@ -21,14 +21,15 @@
 
 ## Agente Ativo
 - **Agente:** Gemini CLI
-- **Status:** Concluído (Evolução da Memória de Correlação - State Store 2.0)
+- **Status:** Concluído (Distributed Tracing com OpenTelemetry + Jaeger)
 - **Horário de Finalização:** 2026-05-09
 - **Tarefas Realizadas:** 
-  1. **Memória Temporal (ZSET):** Refatorada a `RedisCorrelationStore` para usar Sorted Sets (ZSET) com limpeza automática (`ZREMRANGEBYSCORE`). Isso permite reconstruir sessões de ataque multietapa de forma performática.
-  2. **Attack Sessions:** O Rule Engine agora suporta `campaign_id` explícito (vindo do simulador) ou implícito (baseado em IP), rastreando a progressão da Kill Chain.
-  3. **Enriquecimento de Alerta:** Alertas publicados agora incluem `campaign_info` (ID, nome, score de risco da sessão, táticas e técnicas vistas) e sumário de duração.
-  4. **Estabilização Kafka:** Corrigido problema de rebalance infinito no `rule-engine` através de `group_id` dinâmico e remoção de timeouts agressivos.
-  5. **Validação:** Confirmado o funcionamento da agregação temporal e a estabilidade da pipeline core.
+  1. **Instrumentação OTel:** Implementada instrumentação distribuída em toda a pipeline Kafka (`log_collector`, `enrichment_worker`, `rule_engine`, `alert_sink`).
+  2. **Propagação de Contexto:** `trace_id` e `span_id` agora são propagados via headers do Kafka, permitindo visão ponta a ponta de cada evento.
+  3. **Infra Jaeger:** Adicionado serviço Jaeger (All-in-One) ao Docker Compose para coleta e visualização de spans via gRPC (porta 4317).
+  4. **Correção de Schema:** Corrigida inconsistência no banco de dados Postgres (colunas de enriquecimento JSONB faltantes).
+  5. **Estabilização:** Resolvido bug de sintaxe no Rule Engine e otimizado o loop de consumo para suportar a latência da exportação de traces.
+  6. **Validação:** Confirmado status `healthy` em todos os serviços e Jaeger pronto para consulta.
 - **Arquivos Travados:** Nenhum.
 
 ## Histórico de Tarefas Recentes

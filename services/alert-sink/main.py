@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 import psycopg2
 from kafka import KafkaConsumer, KafkaProducer, TopicPartition
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from tracing_helper import setup_tracing, extract_context
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -59,6 +60,9 @@ SERVICE_READY_GAUGE = Gauge("sentinela_service_ready", "Readiness do serviço", 
 OPENSEARCH_INDEXED = Counter("sentinela_opensearch_indexed_total", "Documentos indexados no OpenSearch", ["index"])
 OPENSEARCH_FAILURES = Counter("sentinela_opensearch_failures_total", "Falhas ao indexar no OpenSearch", ["index"])
 DLQ_EVENTS_TOTAL = Counter("sentinela_dlq_events_total", "Eventos enviados para DLQ por serviço", ["service", "topic"])
+
+# Tracing
+TRACER = setup_tracing()
 
 
 def now_iso():
@@ -707,6 +711,7 @@ def persist_incident_for_alert(conn, alert):
                 "event_count": 1,
                 "human_summary": summary,
                 "soc_action": "bloqueio simulado apenas" if alert.get("simulated_block") else "investigação simulada",
+                "campaign_id": alert.get("campaign_id"),
             },
         )
         cur.execute(
@@ -904,59 +909,7 @@ def persist_alert(conn, alert):
                 idempotency_key = EXCLUDED.idempotency_key,
                 enrichment_geoip = EXCLUDED.enrichment_geoip,
                 enrichment_threat = EXCLUDED.enrichment_threat,
-                flink_context = EXCLUDED.flink_context,
-                port = EXCLUDED.port,
-                event_type = EXCLUDED.event_type,
-                ip_event_count = EXCLUDED.ip_event_count,
-                risk_reasons = EXCLUDED.risk_reasons,
-                threat_intel_match = EXCLUDED.threat_intel_match,
-                threat_category = EXCLUDED.threat_category,
-                threat_description = EXCLUDED.threat_description,
-                threat_reputation_score = EXCLUDED.threat_reputation_score,
-                threat_source = EXCLUDED.threat_source,
-                correlation_window_seconds = EXCLUDED.correlation_window_seconds,
-                correlation_key = EXCLUDED.correlation_key,
-                correlation_reason = EXCLUDED.correlation_reason,
-                auto_response = EXCLUDED.auto_response,
-                action_soc = EXCLUDED.action_soc,
-                simulated_block = EXCLUDED.simulated_block,
-                is_demo = EXCLUDED.is_demo,
-                occurrence_count = EXCLUDED.occurrence_count,
-                first_seen = EXCLUDED.first_seen,
-                last_seen = EXCLUDED.last_seen,
-                aggregated = EXCLUDED.aggregated,
-                ports = EXCLUDED.ports,
-                services = EXCLUDED.services,
-                event_types = EXCLUDED.event_types,
-                raw_event = EXCLUDED.raw_event,
-                mitre_techniques = EXCLUDED.mitre_techniques,
-                internal_rule_id = EXCLUDED.internal_rule_id,
-                internal_rule_name = EXCLUDED.internal_rule_name,
-                correlation_rule = EXCLUDED.correlation_rule,
-                response_playbook = EXCLUDED.response_playbook,
-                detection_source = EXCLUDED.detection_source,
-                alert_type = EXCLUDED.alert_type,
-                score_breakdown = EXCLUDED.score_breakdown,
-                score_explanation = EXCLUDED.score_explanation,
-                target_host = EXCLUDED.target_host,
-                target_ip = EXCLUDED.target_ip,
-                target_user = EXCLUDED.target_user,
-                target_service = EXCLUDED.target_service,
-                target_port = EXCLUDED.target_port,
-                target_container = EXCLUDED.target_container,
-                target_application = EXCLUDED.target_application,
-                environment = EXCLUDED.environment,
-                asset_owner = EXCLUDED.asset_owner,
-                asset_criticality = EXCLUDED.asset_criticality,
-                business_impact = EXCLUDED.business_impact,
-                recommended_action = EXCLUDED.recommended_action,
-                action_reason = EXCLUDED.action_reason,
-                execution_mode = EXCLUDED.execution_mode,
-                execution_status = EXCLUDED.execution_status,
-                execution_notes = EXCLUDED.execution_notes,
-                tenant_id = EXCLUDED.tenant_id,
-                correlation_id = EXCLUDED.correlation_id,
-                idempotency_key = EXCLUDED.idempotency_key
+                flink_context = EXCLUDED.flink_context
             """,
             {
                 "event_id": event_id,
@@ -1156,7 +1109,12 @@ def run():
     while True:
         try:
             for message in consumer:
-                persist_alert_with_retry(conn, message.value, dlq_producer)
+                # Extrai contexto do trace anterior para Distributed Tracing
+                ctx = extract_context(message.headers)
+                with TRACER.start_as_current_span("sink_alert", context=ctx) as span:
+                    span.set_attribute("alert_id", (message.value or {}).get("event_id"))
+                    persist_alert_with_retry(conn, message.value, dlq_producer)
+                
                 try:
                     topic_partition = TopicPartition(message.topic, message.partition)
                     end_offsets = consumer.end_offsets([topic_partition])

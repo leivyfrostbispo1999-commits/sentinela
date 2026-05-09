@@ -7,6 +7,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from kafka import KafkaConsumer, KafkaProducer
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+from opentelemetry import trace
+from tracing_helper import setup_tracing, extract_context, inject_context
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
@@ -17,6 +19,9 @@ METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
 ENRICHED_TOTAL = Counter("enrichment_events_total", "Total de eventos enriquecidos")
 ENRICHMENT_LATENCY = Histogram("enrichment_latency_seconds", "Latência do processo de enriquecimento")
 ERRORS_TOTAL = Counter("enrichment_errors_total", "Total de erros no enriquecimento")
+
+# Tracing
+TRACER = setup_tracing()
 
 # Mocks para demonstração comercial
 GEOIP_DB = {
@@ -95,9 +100,6 @@ class EnrichmentWorker:
     def run(self):
         # Inicia servidor de métricas e healthcheck em thread separada
         threading.Thread(target=self.start_ops_server, daemon=True).start()
-        # Inicia servidor Prometheus na mesma porta se desejado, mas aqui usamos o handler manual ou porta extra.
-        # Para simplicidade e compatibilidade com o prompt, usaremos o Prometheus client nativo em outra porta se necessário, 
-        # mas aqui vamos apenas garantir o /health.
         
         consumer = KafkaConsumer(
             RAW_LOGS_TOPIC,
@@ -110,11 +112,24 @@ class EnrichmentWorker:
         print(f"Enrichment Worker iniciado. Consumindo de {RAW_LOGS_TOPIC}...")
         for message in consumer:
             try:
-                raw_log = message.value
-                print(f"Processando evento: {raw_log.get('event_id')} do IP {raw_log.get('ip')}")
-                enriched_log = self.enrich(raw_log)
-                self.producer.send(ENRICHED_LOGS_TOPIC, enriched_log)
-                self.producer.flush()
+                # Extrai contexto do trace anterior
+                ctx = extract_context(message.headers)
+                
+                with TRACER.start_as_current_span("enrich_event", context=ctx) as span:
+                    raw_log = message.value
+                    span.set_attribute("event_id", raw_log.get("event_id"))
+                    span.set_attribute("ip", raw_log.get("ip"))
+                    
+                    print(f"Processando evento: {raw_log.get('event_id')} do IP {raw_log.get('ip')}")
+                    enriched_log = self.enrich(raw_log)
+                    
+                    # Injeta contexto para o próximo salto
+                    headers = {}
+                    inject_context(headers)
+                    kafka_headers = [(k, v.encode("utf-8")) for k, v in headers.items()]
+                    
+                    self.producer.send(ENRICHED_LOGS_TOPIC, enriched_log, headers=kafka_headers)
+                    self.producer.flush()
             except Exception as e:
                 ERRORS_TOTAL.inc()
                 print(f"Erro ao enriquecer log: {e}")
