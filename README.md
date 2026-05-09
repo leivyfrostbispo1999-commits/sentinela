@@ -52,6 +52,24 @@ Utilize os scripts automatizados para subir apenas o que você precisa:
 
 *Nota: Use o parâmetro `-Build` para forçar a reconstrução das imagens.*
 
+### 🛠️ Recuperar Docker Desktop travado via terminal
+
+Caso encontre o erro "Docker Desktop is unable to start", utilize o protocolo de auto-recuperação:
+
+1. Abra o PowerShell como Administrador.
+2. Permita a execução de scripts (se necessário):
+   ```powershell
+   Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+   ```
+3. Execute o script de recuperação para o perfil desejado:
+   ```powershell
+   # Recupera e sobe o essencial (CORE)
+   .\scripts\infra\recover-docker.ps1 -Profile core
+
+   # Recupera e reconstrói a stack completa (FULL)
+   .\scripts\infra\recover-docker.ps1 -Profile full -Rebuild
+   ```
+
 ---
 
 ## 🛠️ Tecnologias

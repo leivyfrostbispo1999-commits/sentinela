@@ -12,9 +12,10 @@
      - `graph`: Neo4j e Graph Engine.
      - `search`: OpenSearch (Cold Storage).
      - `full`: Stack completa para modo "God Mode".
-  3. **UX & Documentation:** 
-     - Criado script `scripts/infra/start-sentinela.ps1` para abstrair a complexidade dos profiles Docker.
-     - README.md atualizado com representação visual da hierarquia de serviços (CORE, ANALYTICS, GRAPH, SEARCH).
+  3. **UX & Infrastructure Resilience:** 
+     - Criado script `scripts/infra/recover-docker.ps1` para reinicialização automatizada do WSL e Docker Desktop, resolvendo travamentos de engine.
+     - Implementado atalho `scripts/infra/start-core.ps1`.
+     - README.md atualizado com guias de auto-recuperação via terminal.
   4. **Higiene:** Validada integridade técnica com 69 testes aprovados.
 - **Arquivos Travados:** Nenhum.
 
