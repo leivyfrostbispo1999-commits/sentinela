@@ -72,6 +72,30 @@ Caso encontre o erro "Docker Desktop is unable to start", utilize o protocolo de
 
 ---
 
+### 🔍 Troubleshooting: localhost:8080 ERR_CONNECTION_REFUSED
+
+Se o Dashboard não carregar no navegador, siga este roteiro de diagnóstico:
+
+1. **Verifique se o perfil CORE está ativo**:
+   ```powershell
+   ./scripts/infra/start-sentinela.ps1 -Profile core
+   ```
+2. **Execute o script de diagnóstico**:
+   ```powershell
+   ./scripts/infra/check-dashboard.ps1
+   ```
+3. **Reconstrua o frontend se necessário**:
+   ```powershell
+   docker compose --profile core up -d --build --force-recreate
+   ```
+4. **Analise os logs de erro**:
+   ```powershell
+   docker compose logs dashboard_web --tail=100
+   docker compose logs dashboard_api --tail=100
+   ```
+
+---
+
 ## 🛠️ Tecnologias
 - **Data**: Kafka, Apache Flink, Redis.
 - **Storage**: PostgreSQL (Hot), OpenSearch (Cold), Neo4j (Graph).
