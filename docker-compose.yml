@@ -111,14 +111,22 @@ services:
       RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-enriched_logs}
       ALERTS_TOPIC: ${ALERTS_TOPIC:-security_alerts}
       DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
-      METRICS_PORT: 8000
+      METRICS_PORT: 8001
     depends_on:
       kafka:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,os; os.environ['NO_PROXY']='127.0.0.1'; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
     networks:
       - sentinela-net
+    mem_limit: 512m
+    cpus: "0.75"
 
   alert_sink:
     build: ./services/alert-sink
@@ -237,13 +245,23 @@ services:
     profiles: ["core", "full"]
     restart: unless-stopped
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - RAW_LOGS_TOPIC=raw_logs
-      - ENRICHED_LOGS_TOPIC=enriched_logs
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      RAW_LOGS_TOPIC: ${RAW_LOGS_TOPIC:-raw_logs}
+      ENRICHED_LOGS_TOPIC: ${ENRICHED_LOGS_TOPIC:-enriched_logs}
+      METRICS_PORT: 8000
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,os; os.environ['NO_PROXY']='127.0.0.1'; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
     networks:
       - sentinela-net
+    mem_limit: 384m
+    cpus: "0.50"
 
   simulator:
     build: ./services/simulator
@@ -403,13 +421,16 @@ services:
     profiles: ["core", "full"]
     restart: unless-stopped
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
-      - DB_HOST=db
-      - DB_PASSWORD=root
-      - RETENTION_ALERTS_DAYS=7
+      DB_HOST: ${DB_HOST:-db}
+      DB_PASSWORD: ${DB_PASSWORD:-root}
+      RETENTION_ALERTS_DAYS: ${RETENTION_ALERTS_DAYS:-7}
     networks:
       - sentinela-net
+    mem_limit: 384m
+    cpus: "0.50"
 
   prometheus:
     image: prom/prometheus:v2.52.0

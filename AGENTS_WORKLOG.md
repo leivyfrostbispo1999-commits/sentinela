@@ -19,6 +19,17 @@
   4. **Higiene:** Validada integridade técnica com 69 testes aprovados.
 - **Arquivos Travados:** Nenhum.
 
+## Agente Ativo
+- **Agente:** Gemini CLI
+- **Status:** Concluído (Correção de Conectividade Docker Hub)
+- **Horário de Finalização:** 2026-05-09
+- **Tarefas Realizadas:** 
+  1. Realizada limpeza do builder (`docker builder prune`).
+  2. Pull manual das imagens base (`nginx:alpine`, `python:3.11-slim`) realizado com sucesso.
+  3. Perfil `core` submetido e construído com sucesso (`docker compose --profile core up -d --build`).
+  4. Todos os 21 serviços do perfil core estão operacionais.
+- **Arquivos Travados:** Nenhum.
+
 ## Histórico de Tarefas Recentes
 - **Status:** Concluído (Agente Anterior)
 - **Tarefas Realizadas:** 
