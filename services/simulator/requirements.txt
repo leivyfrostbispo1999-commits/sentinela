@@ -1,2 +1,4 @@
 kafka-python
-prometheus-client
+prometheus_client
+PyYAML
+

@@ -1,0 +1,81 @@
+campaigns:
+  - name: "Ransomware Execution Sequence"
+    description: "Emula uma sequência de ransomware desde o acesso inicial até a exfiltração de dados."
+    enabled: true
+    attacker_pool: ["203.0.113.45", "198.51.100.88"]
+    target_host: "sentinela-prod-web"
+    steps:
+      - step_id: "s1_initial_access"
+        tactic: "Initial Access"
+        technique: "T1190 - Exploit Public-Facing Application"
+        event_type: "BRUTE_FORCE"
+        port: 443
+        delay_after: 5
+      - step_id: "s2_discovery"
+        tactic: "Discovery"
+        technique: "T1046 - Network Service Discovery"
+        event_type: "PORT_SCAN"
+        port: 445
+        delay_after: 8
+      - step_id: "s3_credential_access"
+        tactic: "Credential Access"
+        technique: "T1003 - OS Credential Dumping"
+        event_type: "CREDENTIAL_ACCESS"
+        port: 0
+        delay_after: 12
+      - step_id: "s4_exfiltration"
+        tactic: "Exfiltration"
+        technique: "T1048 - Exfiltration Over Alternative Protocol"
+        event_type: "EXFILTRATION"
+        port: 443
+        delay_after: 5
+
+  - name: "Cloud Data Exfiltration"
+    description: "Simula o abuso de APIs de nuvem para roubo de dados."
+    enabled: true
+    attacker_pool: ["203.0.113.10"]
+    target_host: "sentinela-aws-core"
+    steps:
+      - step_id: "c1_persistence"
+        tactic: "Persistence"
+        technique: "T1136.003 - Create Account: Cloud Account"
+        event_type: "CLOUD_API_CALL"
+        api_call: "CreateUser"
+        delay_after: 10
+      - step_id: "c2_collection"
+        tactic: "Collection"
+        technique: "T1530 - Data from Cloud Storage Object"
+        event_type: "CLOUD_API_CALL"
+        api_call: "ListS3Buckets"
+        delay_after: 15
+      - step_id: "c3_exfiltration"
+        tactic: "Exfiltration"
+        technique: "T1537 - Transfer Data to Cloud Account"
+        event_type: "CLOUD_API_ABUSE"
+        api_call: "DeleteLogGroup"
+        delay_after: 5
+
+  - name: "Lateral Movement & Domain Dominance"
+    description: "Simula movimento lateral interno após comprometer uma workstation."
+    enabled: true
+    attacker_pool: ["192.168.1.15", "10.0.0.50"]
+    target_host: "sentinela-dc-01"
+    steps:
+      - step_id: "l1_discovery"
+        tactic: "Discovery"
+        technique: "T1018 - Remote System Discovery"
+        event_type: "PORT_SCAN"
+        port: 445
+        delay_after: 10
+      - step_id: "l2_lateral_movement"
+        tactic: "Lateral Movement"
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+        event_type: "LATERAL_MOVEMENT"
+        port: 3389
+        delay_after: 20
+      - step_id: "l3_privilege_escalation"
+        tactic: "Privilege Escalation"
+        technique: "T1068 - Exploitation for Privilege Escalation"
+        event_type: "PRIVILEGE_ESCALATION"
+        port: 0
+        delay_after: 5

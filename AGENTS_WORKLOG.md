@@ -21,15 +21,15 @@
 
 ## Agente Ativo
 - **Agente:** Gemini CLI
-- **Status:** Concluído (Integração de Observabilidade + Core Hardening)
+- **Status:** Concluído (Threat Emulation Avançado + MITRE ATT&CK Playbooks)
 - **Horário de Finalização:** 2026-05-09
 - **Tarefas Realizadas:** 
-  1. **Hardening Core:** Implementados limites de recursos (RAM/CPU) e healthchecks para `rule_engine`, `enrichment-worker` e `lifecycle-worker`.
-  2. **Métricas:** `enrichment-worker` atualizado para expor métricas Prometheus e endpoint de saúde na porta 8000. `rule_engine` configurado para porta 8001.
-  3. **Prometheus:** `prometheus.yml` atualizado para coletar métricas dos novos workers.
-  4. **Grafana:** Dashboard `sentinela-operational-maturity.json` atualizado com 4 novos painéis (vazão, latência p95, alertas e erros de pipeline).
-  5. **Resiliência:** Executada recuperação forçada do Docker Desktop/WSL após falha de engine (Internal Error 500).
-  6. **Validação:** Confirmado status `healthy` em todos os 21 serviços e acessibilidade dos endpoints de métricas via rede interna.
+  1. **Motor de Campanhas:** Implementado orquestrador multithreaded no `sentinela-simulator` capaz de executar playbooks YAML.
+  2. **Playbooks MITRE:** Criado `services/simulator/campaigns/default_campaigns.yml` com cenários de Ransomware, Exfiltração Cloud e Movimento Lateral.
+  3. **Rastreabilidade:** Cada campanha gera um `campaign_id` único; eventos agora incluem `step_id`, `tactic`, `technique` e `campaign_name`.
+  4. **Robustez:** Adicionada validação de esquema YAML na inicialização com falha segura (ignora campanhas inválidas sem quebrar o serviço).
+  5. **Controle:** Implementada flag `ENABLE_CAMPAIGNS` para alternar entre tráfego aleatório e simulações estruturadas.
+  6. **Validação:** Confirmada a produção de eventos de campanha no Kafka e a coexistência com o tráfego normal.
 - **Arquivos Travados:** Nenhum.
 
 ## Histórico de Tarefas Recentes
