@@ -1,0 +1,11 @@
+flask
+psycopg2-binary
+flask-cors
+prometheus-client
+PyYAML
+flask-sock
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation-flask
+opentelemetry-instrumentation-confluent-kafka
