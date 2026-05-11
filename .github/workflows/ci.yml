@@ -50,6 +50,7 @@ jobs:
           test -x ops/recover.sh
           test -x ops/rebuild-core.sh
           test -x ops/validate-config.sh
+          test -x ops/test-event-ingest.sh
           bash -n ops/*.sh
 
       - name: Secret smoke check

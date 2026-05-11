@@ -87,6 +87,7 @@ RULES_CANDIDATES = [
     Path("../rule_engine/rules.yaml"),
 ]
 SENTINELA_VERSION = "SENTINELA 7.0"
+EVENT_SCHEMA_VERSION = "sentinela.event.v1"
 INCIDENT_WINDOW_SECONDS = int(os.getenv("INCIDENT_WINDOW_SECONDS", "600"))
 ALLOWED_INCIDENT_STATUSES = {"NEW", "DETECTED", "TRIAGED", "INVESTIGATING", "CONTAINED", "RESOLVED", "FALSE_POSITIVE", "CLOSED"}
 OPEN_INCIDENT_STATUSES = {"NEW", "DETECTED", "TRIAGED", "INVESTIGATING", "CONTAINED"}
@@ -130,6 +131,7 @@ REQUEST_LATENCY = Histogram(
 HTTP_ERRORS = Counter("sentinela_dashboard_http_errors_total", "Erros HTTP por classe", ["status_class"], registry=REGISTRY)
 RATE_LIMITED_REQUESTS = Counter("sentinela_rate_limited_requests_total", "Requests bloqueados por rate limiting", ["endpoint"], registry=REGISTRY)
 DLQ_EVENTS_TOTAL = Counter("sentinela_dlq_events_total", "Eventos enviados para DLQ por servico", ["service"], registry=REGISTRY)
+EVENT_INGEST_TOTAL = Counter("sentinela_event_ingest_total", "Eventos ingeridos por resultado", ["result", "source"], registry=REGISTRY)
 DEMO_COUNTER = Counter("sentinela_demo_incidents_total", "Total de incidentes demo executados", registry=REGISTRY)
 ALERTS_GAUGE = Gauge("sentinela_alerts_stored_total", "Total de alertas persistidos", registry=REGISTRY)
 INCIDENTS_GAUGE = Gauge("sentinela_incidents_stored_total", "Total de incidentes persistidos", registry=REGISTRY)
@@ -473,6 +475,8 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS campaign_id TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS event_schema_version TEXT DEFAULT 'sentinela.event.v1'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS event_source TEXT")
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS campaign_id TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_campaign_id ON alertas (campaign_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_campaign_id ON incidents (campaign_id)")
@@ -554,9 +558,31 @@ def ensure_schema(conn):
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_response_actions_alert_id ON response_actions (alert_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_response_actions_tenant_id ON response_actions (tenant_id)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_dlq (
+                id SERIAL PRIMARY KEY,
+                tenant_id TEXT DEFAULT 'default',
+                event_id TEXT,
+                idempotency_key TEXT,
+                schema_version TEXT,
+                source TEXT,
+                reason TEXT NOT NULL,
+                payload JSONB NOT NULL,
+                status TEXT DEFAULT 'pending',
+                retry_count INTEGER DEFAULT 0,
+                last_error TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_event_dlq_tenant_created ON event_dlq (tenant_id, created_at DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_event_dlq_status ON event_dlq (status)")
         cur.execute("UPDATE alertas SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
         cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_tenant_ts ON alertas (tenant_id, ts DESC)")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alertas_idempotency_key ON alertas (idempotency_key) WHERE idempotency_key IS NOT NULL")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alertas_idempotency_key_full ON alertas (idempotency_key)")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS blacklist (
@@ -1042,6 +1068,220 @@ def response_context(alert):
         "execution_status": alert.get("execution_status") or "not_executed",
         "execution_notes": alert.get("execution_notes") or "Ambiente local de demonstracao; nenhuma acao real foi executada.",
     }
+
+
+def stable_event_hash(payload):
+    canonical = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def uuid_or_new(value=None):
+    try:
+        return str(uuid.UUID(str(value))) if value else str(uuid.uuid4())
+    except (TypeError, ValueError):
+        return str(uuid.uuid4())
+
+
+def normalize_event_envelope(payload, request_tenant=None):
+    if not isinstance(payload, dict):
+        raise ValueError("payload_must_be_object")
+    body = payload.get("event") or payload.get("data") or payload
+    if not isinstance(body, dict):
+        raise ValueError("event_must_be_object")
+
+    schema_version = payload.get("schema_version") or payload.get("version") or body.get("schema_version") or EVENT_SCHEMA_VERSION
+    if schema_version != EVENT_SCHEMA_VERSION:
+        raise ValueError(f"unsupported_schema_version:{schema_version}")
+
+    tenant = payload.get("tenant_id") or body.get("tenant_id") or request_tenant or DEFAULT_TENANT_ID
+    source = payload.get("source") or body.get("source") or body.get("detection_source") or "api_ingest"
+    event_type = normalize_event_type(body.get("event_type") or body.get("type") or body.get("status"))
+    if not event_type:
+        raise ValueError("missing_event_type")
+
+    source_ip = body.get("source_ip") or body.get("ip") or body.get("src_ip")
+    if not source_ip:
+        raise ValueError("missing_source_ip")
+
+    raw_event_id = payload.get("event_id") or body.get("event_id") or body.get("id")
+    event_uuid = uuid_or_new(raw_event_id)
+    timestamp = body.get("timestamp") or body.get("ts") or payload.get("timestamp") or now_iso()
+    score = int(body.get("score_final") or body.get("score") or body.get("risk") or body.get("risco") or body.get("threat_score") or 0)
+    severity = str(body.get("severity") or severity_from_score(score)).upper()
+    idempotency_key = payload.get("idempotency_key") or body.get("idempotency_key") or str(raw_event_id or "").strip()
+    if not idempotency_key:
+        idempotency_key = stable_event_hash({
+            "schema_version": schema_version,
+            "tenant_id": tenant,
+            "source": source,
+            "event_type": event_type,
+            "source_ip": source_ip,
+            "timestamp": timestamp,
+            "body": body,
+        })
+
+    envelope = {
+        "schema_version": schema_version,
+        "event_id": event_uuid,
+        "external_event_id": str(raw_event_id) if raw_event_id else None,
+        "idempotency_key": idempotency_key,
+        "tenant_id": tenant,
+        "source": source,
+        "timestamp": timestamp,
+        "event": body,
+        "raw_payload": payload,
+    }
+
+    alert = {
+        "event_id": event_uuid,
+        "idempotency_key": idempotency_key,
+        "tenant_id": tenant,
+        "ip": source_ip,
+        "source_ip": source_ip,
+        "status": severity,
+        "risco": score,
+        "score_final": score,
+        "threat_score": score,
+        "severity": severity,
+        "ts": timestamp,
+        "timestamp": timestamp,
+        "event_type": event_type,
+        "service": body.get("service") or body.get("target_service"),
+        "port": body.get("port") or body.get("target_port"),
+        "event_count": int(body.get("event_count") or 1),
+        "ip_event_count": int(body.get("ip_event_count") or body.get("event_count") or 1),
+        "reasons": body.get("reasons") or body.get("risk_reasons") or [],
+        "risk_reasons": body.get("risk_reasons") or body.get("reasons") or [],
+        "correlation_reasons": body.get("correlation_reasons") or [],
+        "raw_event": {"envelope": envelope, **body},
+        "detection_source": body.get("detection_source") or source,
+        "event_schema_version": schema_version,
+        "event_source": source,
+        "is_replay_event": bool(body.get("is_replay_event", False)),
+        "is_demo": bool(body.get("is_demo", False)),
+        "threat_intel_match": bool(body.get("threat_intel_match", False)),
+        "simulated_block": bool(body.get("simulated_block", False)),
+    }
+    for key in (
+        "target_host", "target_ip", "target_user", "target_service", "target_port",
+        "target_container", "target_application", "environment", "asset_owner",
+        "asset_criticality", "business_impact", "recommended_action", "action_reason",
+        "execution_mode", "execution_status", "execution_notes", "replay_id",
+        "correlation_key", "correlation_reason", "auto_response", "action_soc",
+        "threat_category", "threat_description", "threat_reputation_score", "threat_source",
+    ):
+        if key in body:
+            alert[key] = body.get(key)
+    return envelope, enrich_alert(alert)
+
+
+def persist_event_dlq(conn, payload, reason, source="api_ingest", tenant=None, event_id=None, idempotency_key=None, schema_version=None, last_error=None):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO event_dlq (tenant_id, event_id, idempotency_key, schema_version, source, reason, payload, last_error)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            RETURNING id
+            """,
+            (
+                tenant or DEFAULT_TENANT_ID,
+                str(event_id) if event_id else None,
+                idempotency_key,
+                schema_version,
+                source or "api_ingest",
+                reason,
+                json.dumps(payload if isinstance(payload, dict) else {"payload": payload}, ensure_ascii=False, default=str),
+                last_error,
+            ),
+        )
+        row = cur.fetchone()
+    conn.commit()
+    DLQ_EVENTS_TOTAL.labels(service=source or "api_ingest").inc()
+    EVENT_INGEST_TOTAL.labels(result="dlq", source=source or "api_ingest").inc()
+    return int(row[0]) if row else None
+
+
+def persist_ingested_alert(conn, alert):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO alertas (
+                event_id, idempotency_key, tenant_id, ip, source_ip, status, risco,
+                score_final, threat_score, severity, ts, "timestamp", event_type,
+                service, port, event_count, ip_event_count, reasons, risk_reasons,
+                correlation_reasons, raw_event, detection_source, event_schema_version,
+                event_source, human_summary, explanation, mitre_id, mitre_name,
+                mitre_tactic, mitre_techniques, internal_rule_id, internal_rule_name,
+                correlation_rule, response_playbook, alert_type, score_breakdown,
+                score_explanation, target_host, target_ip, target_user, target_service,
+                target_port, target_container, target_application, environment,
+                asset_owner, asset_criticality, business_impact, recommended_action,
+                action_reason, execution_mode, execution_status, execution_notes,
+                replay_id, is_replay_event, is_demo, threat_intel_match,
+                threat_category, threat_description, threat_reputation_score,
+                threat_source, correlation_key, correlation_reason, auto_response,
+                action_soc, simulated_block
+            )
+            VALUES (
+                %(event_id)s, %(idempotency_key)s, %(tenant_id)s, %(ip)s, %(source_ip)s,
+                %(status)s, %(risco)s, %(score_final)s, %(threat_score)s, %(severity)s,
+                %(ts)s, %(timestamp)s, %(event_type)s, %(service)s, %(port)s,
+                %(event_count)s, %(ip_event_count)s, %(reasons)s::jsonb,
+                %(risk_reasons)s::jsonb, %(correlation_reasons)s::jsonb,
+                %(raw_event)s::jsonb, %(detection_source)s, %(event_schema_version)s,
+                %(event_source)s, %(human_summary)s, %(explanation)s, %(mitre_id)s,
+                %(mitre_name)s, %(mitre_tactic)s, %(mitre_techniques)s::jsonb,
+                %(internal_rule_id)s, %(internal_rule_name)s, %(correlation_rule)s,
+                %(response_playbook)s, %(alert_type)s, %(score_breakdown)s::jsonb,
+                %(score_explanation)s, %(target_host)s, %(target_ip)s, %(target_user)s,
+                %(target_service)s, %(target_port)s, %(target_container)s,
+                %(target_application)s, %(environment)s, %(asset_owner)s,
+                %(asset_criticality)s, %(business_impact)s, %(recommended_action)s,
+                %(action_reason)s, %(execution_mode)s, %(execution_status)s,
+                %(execution_notes)s, %(replay_id)s, %(is_replay_event)s, %(is_demo)s,
+                %(threat_intel_match)s, %(threat_category)s, %(threat_description)s,
+                %(threat_reputation_score)s, %(threat_source)s, %(correlation_key)s,
+                %(correlation_reason)s, %(auto_response)s, %(action_soc)s,
+                %(simulated_block)s
+            )
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING event_id
+            """,
+            {
+                **{key: None for key in (
+                    "service", "port", "replay_id", "threat_category", "threat_description",
+                    "threat_reputation_score", "threat_source", "correlation_key",
+                    "correlation_reason", "auto_response", "action_soc", "target_host",
+                    "target_ip", "target_user", "target_service", "target_port",
+                    "target_container", "target_application", "environment", "asset_owner",
+                    "asset_criticality", "business_impact", "recommended_action",
+                    "action_reason", "execution_notes", "mitre_id", "mitre_name", "mitre_tactic"
+                )},
+                "execution_mode": "simulation",
+                "execution_status": "not_executed",
+                "event_count": 1,
+                "ip_event_count": 1,
+                "is_replay_event": False,
+                "is_demo": False,
+                "threat_intel_match": False,
+                "simulated_block": False,
+                **alert,
+                "reasons": json.dumps(json_list(alert.get("reasons")), ensure_ascii=False),
+                "risk_reasons": json.dumps(json_list(alert.get("risk_reasons")), ensure_ascii=False),
+                "correlation_reasons": json.dumps(json_list(alert.get("correlation_reasons")), ensure_ascii=False),
+                "raw_event": json.dumps(alert.get("raw_event", {}), ensure_ascii=False, default=str),
+                "mitre_techniques": json.dumps(json_list(alert.get("mitre_techniques")), ensure_ascii=False),
+                "score_breakdown": json.dumps(alert.get("score_breakdown") or {}, ensure_ascii=False),
+            },
+        )
+        inserted = cur.fetchone() is not None
+    conn.commit()
+    if inserted:
+        materialize_incidents(conn, [alert])
+        EVENT_INGEST_TOTAL.labels(result="accepted", source=alert.get("event_source") or "api_ingest").inc()
+    else:
+        EVENT_INGEST_TOTAL.labels(result="duplicate", source=alert.get("event_source") or "api_ingest").inc()
+    return inserted
 
 
 def enrich_alert(alert):
@@ -2896,6 +3136,81 @@ def auth_refresh():
         "refresh_expires_in": refresh_ttl,
         "user": identity,
     })
+
+
+@app.post("/events")
+@require_role("admin", "analyst")
+def ingest_event():
+    REQUEST_COUNTER.labels(endpoint="events_ingest").inc()
+    payload = request.get_json(silent=True)
+    conn = ensure_connection()
+    try:
+        try:
+            envelope, alert = normalize_event_envelope(payload, request_tenant=tenant_id())
+        except ValueError as exc:
+            dlq_id = persist_event_dlq(conn, payload or {}, reason=str(exc), source="api_ingest", tenant=tenant_id())
+            return jsonify({"status": "rejected", "reason": str(exc), "dlq_id": dlq_id, "schema_version": EVENT_SCHEMA_VERSION}), 400
+
+        try:
+            inserted = persist_ingested_alert(conn, alert)
+        except Exception as exc:
+            conn.rollback()
+            dlq_id = persist_event_dlq(
+                conn,
+                payload or {},
+                reason="persist_failed",
+                source=envelope.get("source"),
+                tenant=envelope.get("tenant_id"),
+                event_id=envelope.get("event_id"),
+                idempotency_key=envelope.get("idempotency_key"),
+                schema_version=envelope.get("schema_version"),
+                last_error=str(exc),
+            )
+            log_json("ERROR", "Falha ao persistir evento; enviado para DLQ", error=str(exc), dlq_id=dlq_id, idempotency_key=envelope.get("idempotency_key"))
+            return jsonify({"status": "dlq", "reason": "persist_failed", "dlq_id": dlq_id}), 202
+
+        return jsonify({
+            "status": "accepted" if inserted else "duplicate",
+            "event_id": envelope["event_id"],
+            "idempotency_key": envelope["idempotency_key"],
+            "schema_version": envelope["schema_version"],
+            "source": envelope["source"],
+        }), 201 if inserted else 200
+    finally:
+        conn.close()
+
+
+@app.get("/events/dlq")
+@require_role("admin", "analyst")
+def list_event_dlq():
+    REQUEST_COUNTER.labels(endpoint="events_dlq").inc()
+    limit, offset = pagination_params(default_limit=50, max_limit=200)
+    status = (request.args.get("status") or "").strip()
+    filters = ["tenant_id = %s"]
+    params = [tenant_id()]
+    if status:
+        filters.append("status = %s")
+        params.append(status)
+    params.extend([limit, offset])
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, tenant_id, event_id, idempotency_key, schema_version, source,
+                       reason, status, retry_count, last_error, created_at, updated_at
+                FROM event_dlq
+                WHERE {' AND '.join(filters)}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                params,
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in cur.description]
+        return jsonify({"count": len(rows), "limit": limit, "offset": offset, "data": [row_to_dict(row, columns) for row in rows]})
+    finally:
+        conn.close()
 
 
 @app.get("/alertas")

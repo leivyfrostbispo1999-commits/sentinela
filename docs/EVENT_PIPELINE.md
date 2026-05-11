@@ -1,0 +1,86 @@
+# Event Pipeline v1
+
+The first mature ingestion path is intentionally lightweight and compatible with the Oracle lite stack.
+
+## Endpoint
+
+```http
+POST /events
+Content-Type: application/json
+```
+
+Auth follows the dashboard API configuration. In the current lite environment, `ENABLE_AUTH=false`, so the endpoint is available to the operational stack without a login flow.
+
+## Envelope
+
+```json
+{
+  "schema_version": "sentinela.event.v1",
+  "source": "collector-name",
+  "tenant_id": "default",
+  "idempotency_key": "collector-name:event-123",
+  "event": {
+    "event_id": "0d4d18ff-ec51-4995-81b9-a88d5998db2c",
+    "event_type": "PORT_SCAN",
+    "source_ip": "203.0.113.77",
+    "score": 55,
+    "service": "ssh",
+    "port": 22,
+    "target_host": "sentinela-api",
+    "target_service": "ssh",
+    "reasons": ["multiple connection attempts"]
+  }
+}
+```
+
+## Required Fields
+
+- `schema_version`: must be `sentinela.event.v1`.
+- `event.event_type`: detection type, normalized to uppercase with underscores.
+- `event.source_ip`: source entity used for alerting and correlation.
+
+## Idempotency
+
+`idempotency_key` is stored in `alertas.idempotency_key` and has a unique partial index. Replaying the same event returns:
+
+```json
+{"status":"duplicate"}
+```
+
+If no idempotency key is provided, the API derives one from the stable event envelope. Producers should still send an explicit key.
+
+## DLQ
+
+Invalid envelopes or persistence failures are recorded in `event_dlq`.
+
+Common rejection reasons:
+
+- `payload_must_be_object`
+- `event_must_be_object`
+- `unsupported_schema_version:<value>`
+- `missing_event_type`
+- `missing_source_ip`
+- `persist_failed`
+
+Operators can inspect the queue with:
+
+```http
+GET /events/dlq
+GET /events/dlq?status=pending
+```
+
+## Metrics
+
+Prometheus counters:
+
+- `sentinela_event_ingest_total{result,source}`
+- `sentinela_dlq_events_total{service}`
+
+## Smoke Test
+
+From the Oracle host:
+
+```bash
+cd /home/ubuntu/sentinela
+./ops/test-event-ingest.sh
+```
