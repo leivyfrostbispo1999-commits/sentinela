@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate operational checkpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate repository safety
+        run: |
+          set -euo pipefail
+          tracked_runtime="$(git ls-files | grep -E '(^|/)\.env$|^backups/|^logs/|\.log$' || true)"
+          if [ -n "$tracked_runtime" ]; then
+            echo "$tracked_runtime"
+            echo "Runtime or secret files are tracked" >&2
+            exit 1
+          fi
+
+      - name: Validate Compose syntax
+        run: docker compose -f docker-compose.lite.yml config >/dev/null
+
+      - name: Validate Python syntax
+        run: python -m compileall -q services cloud_traffic_sim.py
+
+      - name: Validate ops scripts
+        run: |
+          set -euo pipefail
+          test -x ops/start-core.sh
+          test -x ops/stop-core.sh
+          test -x ops/status.sh
+          test -x ops/logs.sh
+          test -x ops/healthcheck.sh
+          test -x ops/backup-db.sh
+          test -x ops/recover.sh
+          test -x ops/rebuild-core.sh
+          test -x ops/validate-config.sh
+          bash -n ops/*.sh
+
+      - name: Secret smoke check
+        run: |
+          set -euo pipefail
+          if grep -R --exclude-dir=.git --exclude=.env --exclude='*.gz' -nE 'SENTINELA_JWT_SECRET=[A-Za-z0-9_-]{20,}' .; then
+            echo "Possible real SENTINELA_JWT_SECRET committed" >&2
+            exit 1
+          fi
