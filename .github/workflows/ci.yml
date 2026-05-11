@@ -51,6 +51,7 @@ jobs:
           test -x ops/rebuild-core.sh
           test -x ops/validate-config.sh
           test -x ops/test-event-ingest.sh
+          test -x ops/retry-dlq.sh
           bash -n ops/*.sh
 
       - name: Secret smoke check

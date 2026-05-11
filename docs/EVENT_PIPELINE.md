@@ -84,3 +84,38 @@ From the Oracle host:
 cd /home/ubuntu/sentinela
 ./ops/test-event-ingest.sh
 ```
+
+## DLQ Retry
+
+Pending or failed DLQ items can be reprocessed without creating duplicates. The retry path reads the original payload, normalizes it again as `sentinela.event.v1`, persists through the same idempotent alert insertion path and then marks the DLQ item as:
+
+- `resolved`: event was accepted and stored.
+- `duplicate`: event already exists by `idempotency_key`.
+- `failed`: event is still invalid or persistence failed.
+
+API:
+
+```http
+POST /events/dlq/retry
+Content-Type: application/json
+
+{"limit": 10}
+```
+
+Retry specific IDs:
+
+```json
+{"limit": 10, "ids": [12, 13]}
+```
+
+Operational script:
+
+```bash
+cd /home/ubuntu/sentinela
+./ops/retry-dlq.sh 10
+./ops/retry-dlq.sh 10 "12,13"
+```
+
+Metric:
+
+- `sentinela_dlq_retry_total{result}`

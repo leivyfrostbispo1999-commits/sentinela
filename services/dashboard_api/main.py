@@ -132,6 +132,7 @@ HTTP_ERRORS = Counter("sentinela_dashboard_http_errors_total", "Erros HTTP por c
 RATE_LIMITED_REQUESTS = Counter("sentinela_rate_limited_requests_total", "Requests bloqueados por rate limiting", ["endpoint"], registry=REGISTRY)
 DLQ_EVENTS_TOTAL = Counter("sentinela_dlq_events_total", "Eventos enviados para DLQ por servico", ["service"], registry=REGISTRY)
 EVENT_INGEST_TOTAL = Counter("sentinela_event_ingest_total", "Eventos ingeridos por resultado", ["result", "source"], registry=REGISTRY)
+DLQ_RETRY_TOTAL = Counter("sentinela_dlq_retry_total", "Tentativas de reprocessamento da DLQ por resultado", ["result"], registry=REGISTRY)
 DEMO_COUNTER = Counter("sentinela_demo_incidents_total", "Total de incidentes demo executados", registry=REGISTRY)
 ALERTS_GAUGE = Gauge("sentinela_alerts_stored_total", "Total de alertas persistidos", registry=REGISTRY)
 INCIDENTS_GAUGE = Gauge("sentinela_incidents_stored_total", "Total de incidentes persistidos", registry=REGISTRY)
@@ -1282,6 +1283,75 @@ def persist_ingested_alert(conn, alert):
     else:
         EVENT_INGEST_TOTAL.labels(result="duplicate", source=alert.get("event_source") or "api_ingest").inc()
     return inserted
+
+
+def mark_dlq_item(conn, item_id, status, retry_count, last_error=None):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE event_dlq
+            SET status = %s,
+                retry_count = %s,
+                last_error = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (status, retry_count, last_error, item_id),
+        )
+    conn.commit()
+
+
+def retry_dlq_items(conn, limit=10, only_ids=None):
+    filters = ["status IN ('pending', 'failed')"]
+    params = []
+    if only_ids:
+        filters.append("id = ANY(%s)")
+        params.append([int(item) for item in only_ids])
+    params.append(limit)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, tenant_id, event_id, idempotency_key, schema_version, source,
+                   reason, payload, retry_count
+            FROM event_dlq
+            WHERE {' AND '.join(filters)}
+            ORDER BY created_at ASC
+            LIMIT %s
+            """,
+            params,
+        )
+        rows = cur.fetchall() or []
+        columns = [desc[0] for desc in cur.description]
+
+    results = []
+    for row in rows:
+        item = row_to_dict(row, columns)
+        retry_count = int(item.get("retry_count") or 0) + 1
+        payload = item.get("payload") or {}
+        try:
+            envelope, alert = normalize_event_envelope(payload, request_tenant=item.get("tenant_id") or DEFAULT_TENANT_ID)
+            inserted = persist_ingested_alert(conn, alert)
+            status = "resolved" if inserted else "duplicate"
+            mark_dlq_item(conn, item["id"], status, retry_count)
+            DLQ_RETRY_TOTAL.labels(result=status).inc()
+            results.append({
+                "id": item["id"],
+                "status": status,
+                "event_id": envelope.get("event_id"),
+                "idempotency_key": envelope.get("idempotency_key"),
+                "retry_count": retry_count,
+            })
+        except ValueError as exc:
+            mark_dlq_item(conn, item["id"], "failed", retry_count, str(exc))
+            DLQ_RETRY_TOTAL.labels(result="failed").inc()
+            results.append({"id": item["id"], "status": "failed", "reason": str(exc), "retry_count": retry_count})
+        except Exception as exc:
+            conn.rollback()
+            mark_dlq_item(conn, item["id"], "failed", retry_count, str(exc))
+            DLQ_RETRY_TOTAL.labels(result="failed").inc()
+            log_json("WARN", "Falha ao reprocessar DLQ", dlq_id=item["id"], error=str(exc))
+            results.append({"id": item["id"], "status": "failed", "reason": "persist_failed", "error": str(exc), "retry_count": retry_count})
+    return results
 
 
 def enrich_alert(alert):
@@ -3209,6 +3279,33 @@ def list_event_dlq():
             rows = cur.fetchall() or []
             columns = [desc[0] for desc in cur.description]
         return jsonify({"count": len(rows), "limit": limit, "offset": offset, "data": [row_to_dict(row, columns) for row in rows]})
+    finally:
+        conn.close()
+
+
+@app.post("/events/dlq/retry")
+@require_role("admin", "analyst")
+def retry_event_dlq():
+    REQUEST_COUNTER.labels(endpoint="events_dlq_retry").inc()
+    payload = request.get_json(silent=True) or {}
+    try:
+        limit = max(1, min(int(payload.get("limit") or request.args.get("limit") or 10), 100))
+    except (TypeError, ValueError):
+        limit = 10
+    raw_ids = payload.get("ids") or request.args.get("ids")
+    only_ids = None
+    if raw_ids:
+        if isinstance(raw_ids, str):
+            only_ids = [int(item.strip()) for item in raw_ids.split(",") if item.strip()]
+        elif isinstance(raw_ids, list):
+            only_ids = [int(item) for item in raw_ids]
+    conn = ensure_connection()
+    try:
+        results = retry_dlq_items(conn, limit=limit, only_ids=only_ids)
+        summary = defaultdict(int)
+        for item in results:
+            summary[item.get("status", "unknown")] += 1
+        return jsonify({"count": len(results), "limit": limit, "summary": dict(summary), "data": results})
     finally:
         conn.close()
 

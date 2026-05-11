@@ -24,7 +24,7 @@ else
 fi
 
 info "required files"
-for file in docker-compose.lite.yml .env.example ops/common.sh ops/start-core.sh ops/healthcheck.sh ops/backup-db.sh ops/test-event-ingest.sh; do
+for file in docker-compose.lite.yml .env.example ops/common.sh ops/start-core.sh ops/healthcheck.sh ops/backup-db.sh ops/test-event-ingest.sh ops/retry-dlq.sh; do
   [ -f "$file" ] || fail "missing $file"
 done
 
