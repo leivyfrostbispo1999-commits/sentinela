@@ -119,3 +119,44 @@ cd /home/ubuntu/sentinela
 Metric:
 
 - `sentinela_dlq_retry_total{result}`
+
+## Event Pipeline Observability
+
+Administrative endpoint:
+
+```http
+GET /events/stats
+```
+
+Response fields:
+
+```json
+{
+  "total_accepted": 0,
+  "total_duplicates": 0,
+  "total_rejected": 0,
+  "dlq_pending": 0,
+  "dlq_failed": 0,
+  "dlq_resolved": 0,
+  "by_source": {},
+  "by_event_type": {}
+}
+```
+
+Operational script:
+
+```bash
+cd /home/ubuntu/sentinela
+./ops/event-stats.sh
+./ops/test-event-stats.sh
+```
+
+Prometheus metrics added for pipeline visibility:
+
+- `sentinela_event_ingest_total{result,source}` for accepted, duplicate, rejected and DLQ outcomes.
+- `sentinela_event_ingest_seconds{source,result}` for ingestion latency.
+- `sentinela_event_pipeline_total{result}` for database-derived totals.
+- `sentinela_events_by_source{source}` for source distribution.
+- `sentinela_events_by_event_type{event_type}` for event type distribution.
+- `sentinela_dlq_items{status}` for pending, failed and resolved DLQ depth.
+- `sentinela_dlq_retry_total{result}` for retry outcomes.

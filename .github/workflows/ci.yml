@@ -52,6 +52,8 @@ jobs:
           test -x ops/validate-config.sh
           test -x ops/test-event-ingest.sh
           test -x ops/retry-dlq.sh
+          test -x ops/event-stats.sh
+          test -x ops/test-event-stats.sh
           bash -n ops/*.sh
 
       - name: Secret smoke check

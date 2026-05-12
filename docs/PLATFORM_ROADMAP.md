@@ -35,9 +35,13 @@ Planned capabilities:
 
 First implementation slice:
 
-- Define event envelope v1.
-- Add DLQ table or Redis stream for failed events.
-- Add operational metrics for retry count, DLQ depth and dropped events.
+- [x] Define event envelope v1.
+- [x] Add DLQ table for failed events.
+- [x] Add idempotent ingestion using `idempotency_key`.
+- [x] Add controlled DLQ retry.
+- [x] Start pipeline observability with `/events/stats`, Prometheus counters, gauges and ingestion latency.
+- [ ] Add priority queues and backpressure signals.
+- [ ] Add bounded retry policy for producers/workers.
 
 ## Priority 2: Investigation Workspace
 
@@ -90,8 +94,9 @@ Planned capabilities:
 
 First implementation slice:
 
-- Expand `/metrics` and `ops/healthcheck.sh` outputs.
-- Add dashboard API health fields for schema, DB, Redis and version.
+- [x] Start event pipeline observability with stats endpoint and Prometheus metrics.
+- [ ] Expand `/metrics` and `ops/healthcheck.sh` outputs for service-level SLOs.
+- [ ] Add dashboard API health fields for schema, DB, Redis and version.
 
 ## Priority 5: Internal Security
 

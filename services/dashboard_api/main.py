@@ -133,6 +133,17 @@ RATE_LIMITED_REQUESTS = Counter("sentinela_rate_limited_requests_total", "Reques
 DLQ_EVENTS_TOTAL = Counter("sentinela_dlq_events_total", "Eventos enviados para DLQ por servico", ["service"], registry=REGISTRY)
 EVENT_INGEST_TOTAL = Counter("sentinela_event_ingest_total", "Eventos ingeridos por resultado", ["result", "source"], registry=REGISTRY)
 DLQ_RETRY_TOTAL = Counter("sentinela_dlq_retry_total", "Tentativas de reprocessamento da DLQ por resultado", ["result"], registry=REGISTRY)
+EVENT_INGEST_LATENCY = Histogram(
+    "sentinela_event_ingest_seconds",
+    "Latencia de ingestao de eventos",
+    ["source", "result"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    registry=REGISTRY,
+)
+EVENT_PIPELINE_TOTAL_GAUGE = Gauge("sentinela_event_pipeline_total", "Resumo de eventos por resultado", ["result"], registry=REGISTRY)
+EVENTS_BY_SOURCE_GAUGE = Gauge("sentinela_events_by_source", "Alertas ingeridos por source", ["source"], registry=REGISTRY)
+EVENTS_BY_TYPE_GAUGE = Gauge("sentinela_events_by_event_type", "Alertas ingeridos por event_type", ["event_type"], registry=REGISTRY)
+DLQ_STATUS_GAUGE = Gauge("sentinela_dlq_items", "Itens DLQ por status", ["status"], registry=REGISTRY)
 DEMO_COUNTER = Counter("sentinela_demo_incidents_total", "Total de incidentes demo executados", registry=REGISTRY)
 ALERTS_GAUGE = Gauge("sentinela_alerts_stored_total", "Total de alertas persistidos", registry=REGISTRY)
 INCIDENTS_GAUGE = Gauge("sentinela_incidents_stored_total", "Total de incidentes persistidos", registry=REGISTRY)
@@ -580,6 +591,18 @@ def ensure_schema(conn):
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_event_dlq_tenant_created ON event_dlq (tenant_id, created_at DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_event_dlq_status ON event_dlq (status)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_pipeline_counters (
+                result TEXT NOT NULL,
+                source TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                total BIGINT DEFAULT 0,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (result, source, event_type)
+            )
+            """
+        )
         cur.execute("UPDATE alertas SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
         cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_tenant_ts ON alertas (tenant_id, ts DESC)")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alertas_idempotency_key ON alertas (idempotency_key) WHERE idempotency_key IS NOT NULL")
@@ -1176,6 +1199,19 @@ def normalize_event_envelope(payload, request_tenant=None):
     return envelope, enrich_alert(alert)
 
 
+def record_event_pipeline_result(conn, result, source="unknown", event_type="UNKNOWN"):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO event_pipeline_counters (result, source, event_type, total, updated_at)
+            VALUES (%s, %s, %s, 1, NOW())
+            ON CONFLICT (result, source, event_type)
+            DO UPDATE SET total = event_pipeline_counters.total + 1, updated_at = NOW()
+            """,
+            (result or "unknown", source or "unknown", event_type or "UNKNOWN"),
+        )
+
+
 def persist_event_dlq(conn, payload, reason, source="api_ingest", tenant=None, event_id=None, idempotency_key=None, schema_version=None, last_error=None):
     with conn.cursor() as cur:
         cur.execute(
@@ -1196,6 +1232,8 @@ def persist_event_dlq(conn, payload, reason, source="api_ingest", tenant=None, e
             ),
         )
         row = cur.fetchone()
+    conn.commit()
+    record_event_pipeline_result(conn, "rejected", source or "api_ingest", "UNKNOWN")
     conn.commit()
     DLQ_EVENTS_TOTAL.labels(service=source or "api_ingest").inc()
     EVENT_INGEST_TOTAL.labels(result="dlq", source=source or "api_ingest").inc()
@@ -1276,6 +1314,8 @@ def persist_ingested_alert(conn, alert):
             },
         )
         inserted = cur.fetchone() is not None
+    result = "accepted" if inserted else "duplicate"
+    record_event_pipeline_result(conn, result, alert.get("event_source") or "api_ingest", alert.get("event_type") or "UNKNOWN")
     conn.commit()
     if inserted:
         materialize_incidents(conn, [alert])
@@ -2896,7 +2936,56 @@ def summarize_incident(alerts):
     return f"Ataque controlado detectado a partir do IP {attacker}. A correlação elevou o incidente para CRITICAL e registrou bloqueio simulado apenas, sem bloqueio real."
 
 
+def event_pipeline_stats(conn):
+    tenant = tenant_id() if has_request_context() else DEFAULT_TENANT_ID
+    stats = {
+        "total_accepted": 0,
+        "total_duplicates": 0,
+        "total_rejected": 0,
+        "dlq_pending": 0,
+        "dlq_failed": 0,
+        "dlq_resolved": 0,
+        "by_source": {},
+        "by_event_type": {},
+    }
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE tenant_id = %s", (tenant,))
+        stats["total_accepted"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COALESCE(event_source, detection_source, 'unknown') AS source, COUNT(*) FROM alertas WHERE tenant_id = %s GROUP BY COALESCE(event_source, detection_source, 'unknown') ORDER BY 2 DESC", (tenant,))
+        stats["by_source"] = {str(source): int(total or 0) for source, total in cur.fetchall() or []}
+        cur.execute("SELECT COALESCE(event_type, 'UNKNOWN') AS event_type, COUNT(*) FROM alertas WHERE tenant_id = %s GROUP BY COALESCE(event_type, 'UNKNOWN') ORDER BY 2 DESC", (tenant,))
+        stats["by_event_type"] = {str(event_type): int(total or 0) for event_type, total in cur.fetchall() or []}
+        cur.execute("SELECT COALESCE(status, 'pending') AS status, COUNT(*) FROM event_dlq WHERE tenant_id = %s GROUP BY COALESCE(status, 'pending')", (tenant,))
+        dlq_by_status = {str(status): int(total or 0) for status, total in cur.fetchall() or []}
+        stats["dlq_pending"] = dlq_by_status.get("pending", 0)
+        stats["dlq_failed"] = dlq_by_status.get("failed", 0)
+        stats["dlq_resolved"] = dlq_by_status.get("resolved", 0) + dlq_by_status.get("duplicate", 0)
+        stats["total_rejected"] = sum(dlq_by_status.values())
+        cur.execute("SELECT COALESCE(SUM(total), 0) FROM event_pipeline_counters WHERE result = 'duplicate'")
+        stats["total_duplicates"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COALESCE(SUM(total), 0) FROM event_pipeline_counters WHERE result = 'rejected'")
+        persisted_rejected = int((cur.fetchone() or [0])[0] or 0)
+        stats["total_rejected"] = max(stats["total_rejected"], persisted_rejected)
+    return stats
+
+
+def refresh_event_pipeline_gauges(conn):
+    stats = event_pipeline_stats(conn)
+    EVENT_PIPELINE_TOTAL_GAUGE.labels(result="accepted").set(stats["total_accepted"])
+    EVENT_PIPELINE_TOTAL_GAUGE.labels(result="duplicate").set(stats["total_duplicates"])
+    EVENT_PIPELINE_TOTAL_GAUGE.labels(result="rejected").set(stats["total_rejected"])
+    DLQ_STATUS_GAUGE.labels(status="pending").set(stats["dlq_pending"])
+    DLQ_STATUS_GAUGE.labels(status="failed").set(stats["dlq_failed"])
+    DLQ_STATUS_GAUGE.labels(status="resolved").set(stats["dlq_resolved"])
+    for source, total in stats["by_source"].items():
+        EVENTS_BY_SOURCE_GAUGE.labels(source=source).set(total)
+    for event_type, total in stats["by_event_type"].items():
+        EVENTS_BY_TYPE_GAUGE.labels(event_type=event_type).set(total)
+    return stats
+
+
 def refresh_prometheus_db_gauges(conn):
+    refresh_event_pipeline_gauges(conn)
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM alertas")
         ALERTS_GAUGE.set(int((cur.fetchone() or [0])[0] or 0))
@@ -3212,6 +3301,7 @@ def auth_refresh():
 @require_role("admin", "analyst")
 def ingest_event():
     REQUEST_COUNTER.labels(endpoint="events_ingest").inc()
+    started_at = time.time()
     payload = request.get_json(silent=True)
     conn = ensure_connection()
     try:
@@ -3219,6 +3309,8 @@ def ingest_event():
             envelope, alert = normalize_event_envelope(payload, request_tenant=tenant_id())
         except ValueError as exc:
             dlq_id = persist_event_dlq(conn, payload or {}, reason=str(exc), source="api_ingest", tenant=tenant_id())
+            EVENT_INGEST_TOTAL.labels(result="rejected", source="api_ingest").inc()
+            EVENT_INGEST_LATENCY.labels(source="api_ingest", result="rejected").observe(time.time() - started_at)
             return jsonify({"status": "rejected", "reason": str(exc), "dlq_id": dlq_id, "schema_version": EVENT_SCHEMA_VERSION}), 400
 
         try:
@@ -3237,15 +3329,31 @@ def ingest_event():
                 last_error=str(exc),
             )
             log_json("ERROR", "Falha ao persistir evento; enviado para DLQ", error=str(exc), dlq_id=dlq_id, idempotency_key=envelope.get("idempotency_key"))
+            EVENT_INGEST_TOTAL.labels(result="rejected", source=envelope.get("source") or "api_ingest").inc()
+            EVENT_INGEST_LATENCY.labels(source=envelope.get("source") or "api_ingest", result="rejected").observe(time.time() - started_at)
             return jsonify({"status": "dlq", "reason": "persist_failed", "dlq_id": dlq_id}), 202
 
+        result = "accepted" if inserted else "duplicate"
+        EVENT_INGEST_LATENCY.labels(source=envelope.get("source") or "api_ingest", result=result).observe(time.time() - started_at)
         return jsonify({
-            "status": "accepted" if inserted else "duplicate",
+            "status": result,
             "event_id": envelope["event_id"],
             "idempotency_key": envelope["idempotency_key"],
             "schema_version": envelope["schema_version"],
             "source": envelope["source"],
         }), 201 if inserted else 200
+    finally:
+        conn.close()
+
+
+@app.get("/events/stats")
+@require_role("admin", "analyst")
+def event_stats():
+    REQUEST_COUNTER.labels(endpoint="events_stats").inc()
+    conn = ensure_connection()
+    try:
+        stats = refresh_event_pipeline_gauges(conn)
+        return jsonify(stats)
     finally:
         conn.close()
 
