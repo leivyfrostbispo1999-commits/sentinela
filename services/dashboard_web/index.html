@@ -1036,15 +1036,17 @@
     </aside>
 
     <script>
-        const API_URL = 'http://localhost:5000/alertas';
-        const DEMO_URL = 'http://localhost:5000/demo/simulate-attack';
-        const INCIDENTS_URL = 'http://localhost:5000/incidents';
-        const INVESTIGATION_URL = 'http://localhost:5000/investigation/ip';
-        const REPORT_URL = 'http://localhost:5000/reports/incident';
-        const RULES_URL = 'http://localhost:5000/rules';
-        const METRICS_URL = 'http://localhost:5000/metrics/summary';
-        const AUTH_URL = 'http://localhost:5000/auth/token';
-        const WS_URL = 'ws://localhost:5000/ws/alerts';
+        const API_ORIGIN = window.location.origin;
+        const WS_ORIGIN = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+        const API_URL = `${API_ORIGIN}/alertas`;
+        const DEMO_URL = `${API_ORIGIN}/demo/simulate-attack`;
+        const INCIDENTS_URL = `${API_ORIGIN}/incidents`;
+        const INVESTIGATION_URL = `${API_ORIGIN}/investigation/ip`;
+        const REPORT_URL = `${API_ORIGIN}/reports/incident`;
+        const RULES_URL = `${API_ORIGIN}/rules`;
+        const METRICS_URL = `${API_ORIGIN}/metrics/summary`;
+        const AUTH_URL = `${API_ORIGIN}/auth/token`;
+        const WS_URL = `${WS_ORIGIN}/ws/alerts`;
         const LEGACY_API_TOKEN = 'sentinela-demo-token';
         const origins = [
             { country: 'Rússia', city: 'Moscow', ip: '45.67.89.12', x: 58, y: 28 },

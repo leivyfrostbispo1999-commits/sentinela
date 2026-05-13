@@ -473,9 +473,7 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS campaign_id TEXT")
-        cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS campaign_id TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_campaign_id ON alertas (campaign_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_campaign_id ON incidents (campaign_id)")
         
         # --- Tabelas SaaS Multi-tenant ---
         cur.execute(
@@ -643,6 +641,7 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed'")
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
         cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
+        cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS campaign_id TEXT")
         cur.execute("UPDATE incidents SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
         cur.execute(
             """
@@ -673,6 +672,7 @@ def ensure_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_primary_source_ip ON incidents (primary_source_ip)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents (status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_last_seen ON incidents (last_seen DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incidents_campaign_id ON incidents (campaign_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_id ON incident_alerts (incident_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_alerts_alert_id ON incident_alerts (alert_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_audit_incident_id ON incident_audit_log (incident_id)")

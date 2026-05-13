@@ -1,0 +1,5 @@
+{
+  "subnetId": "ocid1.subnet.oc1.sa-saopaulo-1.aaaaaaaaln7edugffsegjonsy776slps2xv7ojiesanjku3zsh64o7punpaa",
+  "assignPublicIp": true,
+  "displayName": "sentinela-arm-vnic"
+}

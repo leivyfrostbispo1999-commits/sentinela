@@ -1,0 +1,8 @@
+[
+  {
+    "isStateless": false,
+    "protocol": "all",
+    "destination": "0.0.0.0/0",
+    "destinationType": "CIDR_BLOCK"
+  }
+]

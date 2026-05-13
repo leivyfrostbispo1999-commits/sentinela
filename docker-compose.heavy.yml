@@ -1,0 +1,190 @@
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: sentinela-kafka-heavy
+    restart: "no"
+    profiles: ["heavy"]
+    ports:
+      - "9092:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9094,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 6
+      KAFKA_LOG_RETENTION_BYTES: 536870912
+      KAFKA_LOG_SEGMENT_BYTES: 134217728
+      KAFKA_HEAP_OPTS: "-Xms192m -Xmx256m"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server 127.0.0.1:9092 --list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    mem_limit: 640m
+    cpus: "0.75"
+    networks:
+      - sentinela-micro-net
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: sentinela-jaeger-heavy
+    restart: "no"
+    profiles: ["heavy"]
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    mem_limit: 192m
+    cpus: "0.20"
+    networks:
+      - sentinela-micro-net
+
+  log_collector:
+    build: ./services/log_collector
+    container_name: sentinela-log-collector-heavy
+    restart: "no"
+    profiles: ["heavy"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      RAW_LOGS_TOPIC: raw_logs
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
+      METRICS_PORT: 8000
+      ENABLE_TRACING: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 160m
+    cpus: "0.20"
+    networks:
+      - sentinela-micro-net
+
+  enrichment_worker:
+    build: ./services/enrichment_worker
+    container_name: sentinela-enrichment-heavy
+    restart: "no"
+    profiles: ["heavy"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      RAW_LOGS_TOPIC: raw_logs
+      ENRICHED_EVENTS_TOPIC: enriched_events
+      METRICS_PORT: 8000
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 192m
+    cpus: "0.25"
+    networks:
+      - sentinela-micro-net
+
+  rule_engine:
+    build: ./services/rule_engine
+    container_name: sentinela-rule-engine-heavy
+    restart: "no"
+    profiles: ["heavy"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      RAW_LOGS_TOPIC: enriched_events
+      DETECTIONS_TOPIC: detections
+      ALERTS_TOPIC: alerts
+      AUDIT_LOGS_TOPIC: audit_logs
+      REDIS_URL: redis://sentinela-redis-lite:6379/0
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
+      METRICS_PORT: 8001
+      ENABLE_TRACING: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: "0.45"
+    networks:
+      - sentinela-micro-net
+
+  alert_sink:
+    build: ./services/alert-sink
+    container_name: sentinela-alert-sink-heavy
+    restart: "no"
+    profiles: ["heavy"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DETECTIONS_TOPIC: detections
+      ALERTS_TOPIC: alerts
+      AUDIT_LOGS_TOPIC: audit_logs
+      DB_HOST: sentinela-db-lite
+      DB_PORT: 5432
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASSWORD: root
+      ENABLE_OPENSEARCH: "false"
+      PIPELINE_MAX_RETRIES: 2
+      PIPELINE_RETRY_BACKOFF_MS: 750
+      PIPELINE_MAX_BATCH_SIZE: 25
+      PIPELINE_CONSUMER_TIMEOUT_MS: 1000
+      PIPELINE_POLL_INTERVAL_MS: 500
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
+      METRICS_PORT: 8000
+      ENABLE_TRACING: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 192m
+    cpus: "0.25"
+    networks:
+      - sentinela-micro-net
+
+  simulator:
+    build: ./services/simulator
+    container_name: sentinela-simulator-heavy
+    restart: "no"
+    profiles: ["heavy"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      RAW_LOGS_TOPIC: raw_logs
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-default}
+      METRICS_PORT: 8000
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 160m
+    cpus: "0.20"
+    networks:
+      - sentinela-micro-net
+
+  ai_engine_lite:
+    build:
+      context: ./services/ai_engine
+      dockerfile: Dockerfile
+    container_name: sentinela-ai-lite-heavy
+    restart: "no"
+    profiles: ["heavy"]
+    command: ["python", "ai_engine_lite.py"]
+    environment:
+      DB_HOST: sentinela-db-lite
+      DB_PORT: 5432
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASSWORD: root
+    mem_limit: 192m
+    cpus: "0.25"
+    networks:
+      - sentinela-micro-net
+
+networks:
+  sentinela-micro-net:
+    external: true
+    name: sentinela_sentinela-micro-net
