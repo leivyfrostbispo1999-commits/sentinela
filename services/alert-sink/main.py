@@ -14,7 +14,16 @@ from urllib.request import Request, urlopen
 import psycopg2
 from kafka import KafkaConsumer, KafkaProducer, TopicPartition
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
-from tracing_helper import setup_tracing, extract_context
+
+try:
+    from tracing_helper import setup_tracing, extract_context
+except ImportError:
+    from services.rule_engine.tracing_helper import setup_tracing, extract_context
+
+try:
+    from pipeline_resilience import CircuitBreaker, EVENT_SCHEMA_VERSION, event_priority, retry_backoff_seconds, get_all_priority_topics
+except ImportError:
+    from services.common.pipeline_resilience import CircuitBreaker, EVENT_SCHEMA_VERSION, event_priority, retry_backoff_seconds, get_all_priority_topics
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -37,6 +46,8 @@ PIPELINE_RETRY_BACKOFF_MS = int(os.getenv("PIPELINE_RETRY_BACKOFF_MS", "500"))
 PIPELINE_MAX_BATCH_SIZE = int(os.getenv("PIPELINE_MAX_BATCH_SIZE", "100"))
 PIPELINE_CONSUMER_TIMEOUT_MS = int(os.getenv("PIPELINE_CONSUMER_TIMEOUT_MS", "1000"))
 PIPELINE_POLL_INTERVAL_MS = int(os.getenv("PIPELINE_POLL_INTERVAL_MS", "250"))
+PIPELINE_BREAKER_FAILURE_THRESHOLD = int(os.getenv("PIPELINE_BREAKER_FAILURE_THRESHOLD", "5"))
+PIPELINE_BREAKER_RECOVERY_SECONDS = int(os.getenv("PIPELINE_BREAKER_RECOVERY_SECONDS", "30"))
 ENABLE_NOTIFICATIONS = os.getenv("ENABLE_NOTIFICATIONS", "false").lower() == "true"
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -63,6 +74,10 @@ DLQ_EVENTS_TOTAL = Counter("sentinela_dlq_events_total", "Eventos enviados para 
 
 # Tracing
 TRACER = setup_tracing()
+PIPELINE_BREAKER = CircuitBreaker(
+    failure_threshold=PIPELINE_BREAKER_FAILURE_THRESHOLD,
+    recovery_seconds=PIPELINE_BREAKER_RECOVERY_SECONDS,
+)
 
 
 def now_iso():
@@ -83,7 +98,12 @@ def log_json(level, message, **fields):
 
 
 def backoff_delay(attempt):
-    return min(MAX_BACKOFF_SECONDS, 1.5 * (2 ** min(attempt, 4)))
+    return retry_backoff_seconds(
+        attempt,
+        base_ms=PIPELINE_RETRY_BACKOFF_MS,
+        max_seconds=MAX_BACKOFF_SECONDS,
+        priority="medium",
+    )
 
 
 def opensearch_request(path, method="GET", payload=None, timeout=2.0):
@@ -180,19 +200,26 @@ def connect_postgres():
     global DB_READY
     attempt = 0
     while True:
+        if not PIPELINE_BREAKER.allow():
+            delay = max(1.0, PIPELINE_BREAKER.remaining_seconds())
+            log_json("WARN", "Circuit breaker aberto no alert_sink; aguardando Postgres", breaker=PIPELINE_BREAKER.snapshot(), retry_in_seconds=delay)
+            time.sleep(delay)
+            continue
         try:
             conn = psycopg2.connect(**DB_CONFIG)
             conn.autocommit = False
             log_json("INFO", "Postgres conectado", host=DB_CONFIG["host"], port=DB_CONFIG["port"])
             DB_READY = True
             update_ready_gauge()
+            PIPELINE_BREAKER.record_success()
             return conn
         except Exception as exc:
             DB_READY = False
             update_ready_gauge()
             SERVICE_FAILURES.labels(service="alert_sink").inc()
+            PIPELINE_BREAKER.record_failure()
             delay = backoff_delay(attempt)
-            log_json("WARN", "Aguardando Postgres", error=str(exc), retry_in_seconds=delay)
+            log_json("WARN", "Aguardando Postgres", error=str(exc), retry_in_seconds=delay, breaker=PIPELINE_BREAKER.snapshot())
             time.sleep(delay)
             attempt += 1
 
@@ -316,6 +343,12 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'simulation'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_notes TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS event_schema_version TEXT DEFAULT 'sentinela.event.v2'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS pipeline_priority TEXT DEFAULT 'medium'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS pipeline_retry_count INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS max_retry_count INTEGER DEFAULT 3")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS retry_strategy TEXT DEFAULT 'exponential_backoff'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
@@ -441,9 +474,15 @@ def create_consumer():
     global KAFKA_READY
     attempt = 0
     while True:
+        if not PIPELINE_BREAKER.allow():
+            delay = max(1.0, PIPELINE_BREAKER.remaining_seconds())
+            log_json("WARN", "Circuit breaker aberto no alert_sink; aguardando Kafka", breaker=PIPELINE_BREAKER.snapshot(), retry_in_seconds=delay)
+            time.sleep(delay)
+            continue
         try:
+            topics = get_all_priority_topics(ALERTS_TOPIC)
             consumer = KafkaConsumer(
-                ALERTS_TOPIC,
+                *topics,
                 bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
                 group_id=os.getenv("ALERT_SINK_GROUP_ID", "alert-sink-v1"),
                 auto_offset_reset=os.getenv("KAFKA_AUTO_OFFSET_RESET", "earliest"),
@@ -452,16 +491,18 @@ def create_consumer():
                 consumer_timeout_ms=PIPELINE_CONSUMER_TIMEOUT_MS,
                 value_deserializer=lambda message: json.loads(message.decode("utf-8")),
             )
-            log_json("INFO", "Kafka conectado", topic=ALERTS_TOPIC)
+            log_json("INFO", "Kafka conectado", topics=topics)
             KAFKA_READY = True
             update_ready_gauge()
+            PIPELINE_BREAKER.record_success()
             return consumer
         except Exception as exc:
             KAFKA_READY = False
             update_ready_gauge()
             SERVICE_FAILURES.labels(service="alert_sink").inc()
+            PIPELINE_BREAKER.record_failure()
             delay = backoff_delay(attempt)
-            log_json("WARN", "Aguardando Kafka", error=str(exc), retry_in_seconds=delay)
+            log_json("WARN", "Aguardando Kafka", error=str(exc), retry_in_seconds=delay, breaker=PIPELINE_BREAKER.snapshot())
             time.sleep(delay)
             attempt += 1
 
@@ -469,15 +510,23 @@ def create_consumer():
 def create_producer():
     attempt = 0
     while True:
+        if not PIPELINE_BREAKER.allow():
+            delay = max(1.0, PIPELINE_BREAKER.remaining_seconds())
+            log_json("WARN", "Circuit breaker aberto no alert_sink; aguardando Kafka producer", breaker=PIPELINE_BREAKER.snapshot(), retry_in_seconds=delay)
+            time.sleep(delay)
+            continue
         try:
-            return KafkaProducer(
+            producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
                 value_serializer=lambda value: json.dumps(value, ensure_ascii=False).encode("utf-8"),
             )
+            PIPELINE_BREAKER.record_success()
+            return producer
         except Exception as exc:
             SERVICE_FAILURES.labels(service="alert_sink").inc()
+            PIPELINE_BREAKER.record_failure()
             delay = backoff_delay(attempt)
-            log_json("WARN", "Aguardando Kafka producer DLQ", error=str(exc), retry_in_seconds=delay)
+            log_json("WARN", "Aguardando Kafka producer DLQ", error=str(exc), retry_in_seconds=delay, breaker=PIPELINE_BREAKER.snapshot())
             time.sleep(delay)
             attempt += 1
 
@@ -803,7 +852,9 @@ def persist_alert(conn, alert):
                 target_user, target_service, target_port, target_container,
                 target_application, environment, asset_owner, asset_criticality,
                 business_impact, recommended_action, action_reason, execution_mode,
-                execution_status, execution_notes, tenant_id, correlation_id, idempotency_key,
+                execution_status, execution_notes, event_schema_version, pipeline_priority,
+                pipeline_retry_count, max_retry_count, next_retry_at, retry_strategy,
+                tenant_id, correlation_id, idempotency_key,
                 enrichment_geoip, enrichment_threat, flink_context
             )
             VALUES (
@@ -831,7 +882,9 @@ def persist_alert(conn, alert):
                 %(target_user)s, %(target_service)s, %(target_port)s, %(target_container)s,
                 %(target_application)s, %(environment)s, %(asset_owner)s, %(asset_criticality)s,
                 %(business_impact)s, %(recommended_action)s, %(action_reason)s, %(execution_mode)s,
-                %(execution_status)s, %(execution_notes)s, %(tenant_id)s, %(correlation_id)s, %(idempotency_key)s,
+                %(execution_status)s, %(execution_notes)s, %(event_schema_version)s, %(pipeline_priority)s,
+                %(pipeline_retry_count)s, %(max_retry_count)s, %(next_retry_at)s, %(retry_strategy)s,
+                %(tenant_id)s, %(correlation_id)s, %(idempotency_key)s,
                 %(enrichment_geoip)s::jsonb, %(enrichment_threat)s::jsonb, %(flink_context)s::jsonb
             )
             ON CONFLICT (event_id) DO UPDATE SET
@@ -904,6 +957,12 @@ def persist_alert(conn, alert):
                 execution_mode = EXCLUDED.execution_mode,
                 execution_status = EXCLUDED.execution_status,
                 execution_notes = EXCLUDED.execution_notes,
+                event_schema_version = EXCLUDED.event_schema_version,
+                pipeline_priority = EXCLUDED.pipeline_priority,
+                pipeline_retry_count = EXCLUDED.pipeline_retry_count,
+                max_retry_count = EXCLUDED.max_retry_count,
+                next_retry_at = EXCLUDED.next_retry_at,
+                retry_strategy = EXCLUDED.retry_strategy,
                 tenant_id = EXCLUDED.tenant_id,
                 correlation_id = EXCLUDED.correlation_id,
                 idempotency_key = EXCLUDED.idempotency_key,
@@ -981,6 +1040,12 @@ def persist_alert(conn, alert):
                 "execution_mode": alert.get("execution_mode", "simulation"),
                 "execution_status": alert.get("execution_status", "not_executed"),
                 "execution_notes": alert.get("execution_notes"),
+                "event_schema_version": alert.get("event_schema_version", EVENT_SCHEMA_VERSION),
+                "pipeline_priority": alert.get("pipeline_priority", event_priority(alert)),
+                "pipeline_retry_count": int(alert.get("pipeline_retry_count", 0) or 0),
+                "max_retry_count": int(alert.get("max_retry_count", PIPELINE_MAX_RETRIES) or PIPELINE_MAX_RETRIES),
+                "next_retry_at": alert.get("next_retry_at"),
+                "retry_strategy": alert.get("retry_strategy", "exponential_backoff"),
                 "tenant_id": alert.get("tenant_id") or DEFAULT_TENANT_ID,
                 "correlation_id": alert.get("correlation_id") or event_id,
                 "idempotency_key": alert.get("idempotency_key") or idempotency_key_for_alert(alert),
@@ -1049,6 +1114,21 @@ def parse_alert_epoch(value):
 
 
 def build_dlq_event(original_event, exc, failed_service="alert_sink", source_topic=ALERTS_TOPIC, target_topic=None, retry_count=0):
+    priority = event_priority(original_event)
+    next_retry_at = None
+    if retry_count < PIPELINE_MAX_RETRIES:
+        next_retry_at = datetime.fromtimestamp(
+            time.time() + retry_backoff_seconds(
+                retry_count,
+                base_ms=PIPELINE_RETRY_BACKOFF_MS,
+                max_seconds=MAX_BACKOFF_SECONDS,
+                priority=priority,
+                seed=(original_event or {}).get("event_id") or (original_event or {}).get("correlation_id"),
+            ),
+            timezone.utc,
+        ).isoformat()
+    else:
+        next_retry_at = None
     return {
         "original_event": original_event,
         "error_message": str(exc),
@@ -1056,6 +1136,11 @@ def build_dlq_event(original_event, exc, failed_service="alert_sink", source_top
         "failed_service": failed_service,
         "failed_at": now_iso(),
         "retry_count": retry_count,
+        "max_retry_count": PIPELINE_MAX_RETRIES,
+        "next_retry_at": next_retry_at,
+        "retry_strategy": "exponential_backoff",
+        "pipeline_priority": priority,
+        "event_schema_version": (original_event or {}).get("event_schema_version") or EVENT_SCHEMA_VERSION,
         "tenant_id": (original_event or {}).get("tenant_id") or DEFAULT_TENANT_ID,
         "correlation_id": (original_event or {}).get("correlation_id") or (original_event or {}).get("event_id"),
         "source_topic": source_topic,
@@ -1077,14 +1162,24 @@ def publish_dlq(producer, dlq_event):
 def persist_alert_with_retry(conn, alert, dlq_producer):
     last_exc = None
     for attempt in range(PIPELINE_MAX_RETRIES + 1):
+        if not PIPELINE_BREAKER.allow():
+            delay = max(1.0, PIPELINE_BREAKER.remaining_seconds())
+            log_json("WARN", "Circuit breaker aberto no alert_sink; aguardando persistencia", breaker=PIPELINE_BREAKER.snapshot(), retry_in_seconds=delay, tenant_id=alert.get("tenant_id"), correlation_id=alert.get("correlation_id"))
+            time.sleep(delay)
+            continue
         try:
             alert.setdefault("pipeline_retry_count", attempt)
+            alert.setdefault("event_schema_version", EVENT_SCHEMA_VERSION)
+            alert.setdefault("pipeline_priority", event_priority(alert))
+            alert.setdefault("max_retry_count", PIPELINE_MAX_RETRIES)
             persist_alert(conn, alert)
+            PIPELINE_BREAKER.record_success()
             return True
         except Exception as exc:
             last_exc = exc
             WRITE_FAILURES.inc()
             SERVICE_FAILURES.labels(service="alert_sink").inc()
+            PIPELINE_BREAKER.record_failure()
             try:
                 conn.rollback()
             except Exception:
@@ -1092,8 +1187,14 @@ def persist_alert_with_retry(conn, alert, dlq_producer):
             if attempt >= PIPELINE_MAX_RETRIES:
                 publish_dlq(dlq_producer, build_dlq_event(alert, exc, retry_count=attempt))
                 return False
-            delay = PIPELINE_RETRY_BACKOFF_MS / 1000 * (2 ** attempt)
-            log_json("WARN", "Retry estruturado no alert_sink", retry_count=attempt + 1, retry_in_seconds=delay, error=str(exc), tenant_id=alert.get("tenant_id"), correlation_id=alert.get("correlation_id"))
+            delay = retry_backoff_seconds(
+                attempt,
+                base_ms=PIPELINE_RETRY_BACKOFF_MS,
+                max_seconds=MAX_BACKOFF_SECONDS,
+                priority=event_priority(alert),
+                seed=alert.get("event_id") or alert.get("correlation_id"),
+            )
+            log_json("WARN", "Retry estruturado no alert_sink", retry_count=attempt + 1, retry_in_seconds=delay, error=str(exc), tenant_id=alert.get("tenant_id"), correlation_id=alert.get("correlation_id"), pipeline_priority=alert.get("pipeline_priority"))
             time.sleep(delay)
     publish_dlq(dlq_producer, build_dlq_event(alert, last_exc or RuntimeError("unknown"), retry_count=PIPELINE_MAX_RETRIES))
     return False

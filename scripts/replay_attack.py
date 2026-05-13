@@ -79,6 +79,11 @@ def build_event(replay_id, event_data, sequence=0):
         "sequence": sequence,
         "mitre_id": event_data.get("mitre_id"),
         "simulated_only": True,
+        "campaign_id": event_data.get("campaign_id") or replay_id,
+        "attack_session_id": event_data.get("attack_session_id") or replay_id,
+        "tactic": event_data.get("tactic"),
+        "technique_id": event_data.get("technique_id") or event_data.get("mitre_id"),
+        "stage": event_data.get("stage") or sequence,
     }
 
 def load_scenario(path):

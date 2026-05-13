@@ -2,3 +2,4 @@ kafka-python
 numpy
 scikit-learn
 scipy
+psycopg2-binary

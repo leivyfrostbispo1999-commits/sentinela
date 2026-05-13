@@ -42,3 +42,7 @@ docker inspect \
 echo
 echo "== Memory =="
 free -h
+
+echo
+echo "== Host port guard =="
+ops/oci/check_host_ports.sh

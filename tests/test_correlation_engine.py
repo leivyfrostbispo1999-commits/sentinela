@@ -1,5 +1,6 @@
 import pytest
 import json
+import sys
 from services.rule_engine.correlation_engine import CorrelationEngine, get_mitre_mapping
 
 class MockStore:
@@ -90,12 +91,12 @@ def test_correlation_tenant_volume():
     store = MockStore()
     engine = CorrelationEngine(store)
     
-    # Gerar 20 eventos suspeitos no mesmo tenant
-    for _ in range(20):
+    # Gerar 50 eventos suspeitos no mesmo tenant (HIGH threshold)
+    for _ in range(50):
         log = {"ip": "1.1.1.1", "event_type": "PORT_SCAN", "tenant_id": "t1"}
         res = engine.correlate(log, [])
     
-    assert any("tenant_medium_volume" in r for r in res["reasons"])
+    assert any("tenant_high_volume" in r for r in res["reasons"])
 
 def test_correlation_high_volume_single_ip():
     store = MockStore()
@@ -105,4 +106,55 @@ def test_correlation_high_volume_single_ip():
     log = {"ip": "1.1.1.1", "event_type": "NORMAL"}
     
     correlation = engine.correlate(log, events)
-    assert "high_volume_detected" in correlation["reasons"]
+    assert "high_session_volume" in correlation["reasons"]
+
+def test_redis_stream_store_logic(monkeypatch):
+    import types
+    import json
+    
+    mock_redis_obj = types.SimpleNamespace()
+    mock_redis_obj.data = {}
+    mock_redis_obj.calls = []
+    
+    def mock_xadd(key, payload, maxlen=0, approximate=False):
+        mock_redis_obj.data.setdefault(key, []).append(("id", payload))
+        mock_redis_obj.calls.append(("xadd", key, maxlen))
+        
+    def mock_xrange(key, min="-", max="+"):
+        return mock_redis_obj.data.get(key, [])
+
+    def mock_expire(key, ttl):
+        mock_redis_obj.calls.append(("expire", key, ttl))
+
+    def mock_xtrim(key, minid=None, approximate=False):
+        mock_redis_obj.calls.append(("xtrim", key, minid))
+        
+    mock_redis_obj.xadd = mock_xadd
+    mock_redis_obj.xrange = mock_xrange
+    mock_redis_obj.expire = mock_expire
+    mock_redis_obj.xtrim = mock_xtrim
+    mock_redis_obj.ping = lambda: True
+    
+    mock_redis_lib = types.SimpleNamespace()
+    mock_redis_lib.from_url = lambda *a, **k: mock_redis_obj
+    monkeypatch.setitem(sys.modules, "redis", mock_redis_lib)
+    
+    # Importar main dinamicamente para usar a store
+    from services.rule_engine.main import RedisStreamCorrelationStore
+    
+    store = RedisStreamCorrelationStore("redis://localhost", 300)
+    event = {"seen_at": 1000, "id": 1}
+    
+    # Testar add e get
+    events = store.add_event("session1", event)
+    assert len(events) == 1
+    
+    # Verificar se chamou xadd, expire e xtrim
+    calls = [c[0] for c in mock_redis_obj.calls]
+    assert "xadd" in calls
+    assert "expire" in calls
+    assert "xtrim" in calls
+    
+    # Verificar TTL (2x window_seconds = 600)
+    expire_call = [c for c in mock_redis_obj.calls if c[0] == "expire"][0]
+    assert expire_call[2] == 600

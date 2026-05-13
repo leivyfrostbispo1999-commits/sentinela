@@ -1,0 +1,75 @@
+services:
+  # --- LITE STACK (Otimizado para 1GB RAM) ---
+  db:
+    image: postgres:15-alpine
+    container_name: sentinela-db-lite
+    restart: always
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+    mem_limit: 128m
+    cpus: "0.25"
+    networks:
+      - sentinela-lite-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: sentinela-redis-lite
+    restart: always
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: 128m
+    networks:
+      - sentinela-lite-net
+
+  # Dashboard API - O coração do monitoramento
+  dashboard_api:
+    build: 
+      context: ./services/dashboard_api
+    container_name: sentinela-api-lite
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      DB_HOST: db
+      SENTINELA_ENV: production
+      ENABLE_AUTH: "false" # Facilitar teste inicial
+    depends_on:
+      - db
+    mem_limit: 200m
+    networks:
+      - sentinela-lite-net
+
+  # Dashboard Web - A cara do SENTINELA
+  dashboard_web:
+    build:
+      context: ./services/dashboard_web
+    container_name: sentinela-web-lite
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - dashboard_api
+    mem_limit: 64m
+    networks:
+      - sentinela-lite-net
+
+  # AI Engine Lite - Análise comportamental via DB
+  ai_engine_lite:
+    build:
+      context: ./services/ai_engine
+      dockerfile: Dockerfile
+    container_name: sentinela-ai-lite
+    restart: always
+    command: ["python", "ai_engine_lite.py"]
+    environment:
+      DB_HOST: db
+    depends_on:
+      - db
+    mem_limit: 256m
+    networks:
+      - sentinela-lite-net
+
+networks:
+  sentinela-lite-net:
+    driver: bridge

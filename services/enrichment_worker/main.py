@@ -12,7 +12,7 @@ from tracing_helper import setup_tracing, extract_context, inject_context
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 RAW_LOGS_TOPIC = os.getenv("RAW_LOGS_TOPIC", "raw_logs")
-ENRICHED_LOGS_TOPIC = os.getenv("ENRICHED_LOGS_TOPIC", "enriched_logs")
+ENRICHED_EVENTS_TOPIC = os.getenv("ENRICHED_EVENTS_TOPIC", "enriched_events")
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
 
 # Métricas
@@ -128,7 +128,7 @@ class EnrichmentWorker:
                     inject_context(headers)
                     kafka_headers = [(k, v.encode("utf-8")) for k, v in headers.items()]
                     
-                    self.producer.send(ENRICHED_LOGS_TOPIC, enriched_log, headers=kafka_headers)
+                    self.producer.send(ENRICHED_EVENTS_TOPIC, enriched_log, headers=kafka_headers)
                     self.producer.flush()
             except Exception as e:
                 ERRORS_TOTAL.inc()

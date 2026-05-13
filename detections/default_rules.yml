@@ -66,6 +66,40 @@ rules:
     correlation_key: source_ip
     action: simulated_block
 
+  - name: web_exploit_attempt
+    description: Detecta tentativas de exploração web (SQLi, XSS, Path Traversal).
+    enabled: true
+    event_type: WEB_ATTACK
+    threshold: 2
+    window_seconds: 120
+    score: 65
+    severity: HIGH
+    mitre_id: T1190
+    mitre_name: Exploit Public-Facing Application
+    mitre_tactic: Initial Access
+    tags:
+      - web
+      - exploit
+    correlation_key: source_ip
+    action: monitor
+
+  - name: cloud_reconnaissance
+    description: Detecta varredura agressiva contra múltiplas portas em curto intervalo.
+    enabled: true
+    event_type: PORT_SCAN
+    threshold: 15
+    window_seconds: 30
+    score: 50
+    severity: MEDIUM
+    mitre_id: T1595
+    mitre_name: Active Scanning
+    mitre_tactic: Reconnaissance
+    tags:
+      - reconnaissance
+      - cloud
+    correlation_key: source_ip
+    action: simulated_block
+
   - name: disabled_example
     description: Exemplo seguro de regra desabilitada ignorada pelo engine.
     enabled: false

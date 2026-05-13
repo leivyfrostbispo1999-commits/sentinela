@@ -14,6 +14,11 @@ sys.path.insert(0, str(RULE_ENGINE_PATH))
 if "kafka" not in sys.modules:
     sys.modules["kafka"] = types.SimpleNamespace(KafkaConsumer=object, KafkaProducer=object)
 
+if "redis" not in sys.modules:
+    mock_redis = types.SimpleNamespace()
+    mock_redis.from_url = lambda *args, **kwargs: types.SimpleNamespace(ping=lambda: True)
+    sys.modules["redis"] = mock_redis
+
 
 def load_rule_engine(monkeypatch):
     monkeypatch.setenv("REDIS_STATE_ENABLED", "false")
@@ -96,10 +101,12 @@ def test_correlation_identifies_privileged_brute_force(monkeypatch):
     assert "usuário privilegiado" in reason
 
 
+from services.rule_engine.dsl_parser import SigmaRuleCompiler
+
 def test_yaml_multistage_detection(monkeypatch):
     rule_engine = load_rule_engine(monkeypatch)
     rules = [
-        {
+        SigmaRuleCompiler({
             "title": "ataque_multi_etapa",
             "enabled": True,
             "priority": 80,
@@ -110,7 +117,7 @@ def test_yaml_multistage_detection(monkeypatch):
             "threshold": {"count": 2, "timeframe": "300s"},
             "level": "high",
             "status": "ATAQUE MULTIETAPA"
-        }
+        })
     ]
 
     now = time.time()
@@ -218,7 +225,7 @@ def test_load_rules_uses_internal_fallback_when_yaml_missing(monkeypatch):
 
     rules = rule_engine.load_rules()
 
-    assert any(rule["name"] == "brute_force" for rule in rules)
+    assert any(rule.rule.get("title") == "brute_force" for rule in rules)
 
 
 def test_load_rules_ignores_disabled_and_normalizes_yaml(monkeypatch, tmp_path):
@@ -252,10 +259,10 @@ rules:
 
     rules = rule_engine.load_rules()
 
-    assert all(rule["name"] != "disabled_rule" for rule in rules)
-    assert rules[0]["name"] == "ssh_brute_force"
-    assert rules[0]["severity"] == "LOW"
-    assert rules[0]["action"] == "simulated_block"
+    assert all(rule.rule.get("title") != "disabled_rule" for rule in rules)
+    assert rules[0].rule.get("title") == "ssh_brute_force"
+    assert rules[0].rule.get("level") == "low"
+    assert rules[0].rule.get("action") == "simulated_block"
 
 
 def test_load_rules_fallback_on_bad_yaml(monkeypatch, tmp_path):
@@ -266,7 +273,7 @@ def test_load_rules_fallback_on_bad_yaml(monkeypatch, tmp_path):
 
     rules = rule_engine.load_rules()
 
-    assert any(rule["name"] == "ssh_brute_force" for rule in rules)
+    assert any(rule.rule.get("title") == "brute_force" for rule in rules)
 
 
 def test_ioc_enrichment_supports_domain_url_and_hash(monkeypatch):

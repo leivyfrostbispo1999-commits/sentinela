@@ -12,19 +12,40 @@ from threading import Thread
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 from pathlib import Path
-from mitre_utils import get_mitre_mapping
+
+try:
+    from mitre_utils import get_mitre_mapping
+except ImportError:
+    try:
+        from services.rule_engine.mitre_utils import get_mitre_mapping
+    except ImportError:
+        get_mitre_mapping = lambda x: {"id": None, "name": "Unknown", "tactic": "Unknown"}
 
 try:
     import yaml
 except ImportError:
     yaml = None
+import redis
 from kafka import KafkaConsumer, KafkaProducer
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
-from threat_intel import check_ioc, check_ip
-from correlation_engine import CorrelationEngine
-from response_engine import ResponseEngine
-from tracing_helper import setup_tracing, extract_context, inject_context
-from dsl_parser import SigmaRuleCompiler
+
+try:
+    from threat_intel import check_ioc, check_ip
+    from correlation_engine import CorrelationEngine
+    from response_engine import ResponseEngine
+    from tracing_helper import setup_tracing, extract_context, inject_context
+    from dsl_parser import SigmaRuleCompiler
+except ImportError:
+    from services.rule_engine.threat_intel import check_ioc, check_ip
+    from services.rule_engine.correlation_engine import CorrelationEngine
+    from services.rule_engine.response_engine import ResponseEngine
+    from services.rule_engine.tracing_helper import setup_tracing, extract_context, inject_context
+    from services.rule_engine.dsl_parser import SigmaRuleCompiler
+
+try:
+    from pipeline_resilience import CircuitBreaker, EVENT_SCHEMA_VERSION, event_priority, retry_backoff_seconds, get_priority_topic
+except ImportError:
+    from services.common.pipeline_resilience import CircuitBreaker, EVENT_SCHEMA_VERSION, event_priority, retry_backoff_seconds, get_priority_topic
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -38,6 +59,8 @@ PIPELINE_MAX_RETRIES = int(os.getenv("PIPELINE_MAX_RETRIES", "3"))
 PIPELINE_RETRY_BACKOFF_MS = int(os.getenv("PIPELINE_RETRY_BACKOFF_MS", "500"))
 PIPELINE_MAX_BATCH_SIZE = int(os.getenv("PIPELINE_MAX_BATCH_SIZE", "100"))
 PIPELINE_POLL_INTERVAL_MS = int(os.getenv("PIPELINE_POLL_INTERVAL_MS", "250"))
+PIPELINE_BREAKER_FAILURE_THRESHOLD = int(os.getenv("PIPELINE_BREAKER_FAILURE_THRESHOLD", "5"))
+PIPELINE_BREAKER_RECOVERY_SECONDS = int(os.getenv("PIPELINE_BREAKER_RECOVERY_SECONDS", "30"))
 RULES_PATH = Path(os.getenv("RULES_PATH", "sentinela_rules.yml"))
 
 STATE_WINDOW_SECONDS = int(os.getenv("CORRELATION_WINDOW_SECONDS", "300"))
@@ -97,6 +120,10 @@ SEVERITY_PRIORITY = {
 
 # Tracing
 TRACER = setup_tracing()
+PIPELINE_BREAKER = CircuitBreaker(
+    failure_threshold=PIPELINE_BREAKER_FAILURE_THRESHOLD,
+    recovery_seconds=PIPELINE_BREAKER_RECOVERY_SECONDS,
+)
 
 threat_cache = {}
 
@@ -119,7 +146,12 @@ def log_json(level, message, **fields):
 
 
 def backoff_delay(attempt):
-    return min(MAX_BACKOFF_SECONDS, 1.5 * (2 ** min(attempt, 4)))
+    return retry_backoff_seconds(
+        attempt,
+        base_ms=PIPELINE_RETRY_BACKOFF_MS,
+        max_seconds=MAX_BACKOFF_SECONDS,
+        priority="medium",
+    )
 
 
 def parse_epoch(value):
@@ -290,116 +322,67 @@ class InMemoryCorrelationStore:
         return len(counts)
 
 
-class RedisCorrelationStore:
+class RedisStreamCorrelationStore:
     def __init__(self, redis_url, window_seconds):
-        parsed = urlparse(redis_url)
-        self.host = parsed.hostname or "redis"
-        self.port = parsed.port or 6379
-        self.db = int((parsed.path or "/0").strip("/") or 0)
+        self.redis = redis.from_url(redis_url, decode_responses=True)
         self.window_seconds = window_seconds
-        self.key_prefix = "sentinela:rule_engine:events:"
+        self.prefix = "sentinela:stream:"
         self.aggregate_prefix = "sentinela:rule_engine:alerts:"
-        self.timeout = 0.8
-        self._select_db()
-
-    def _encode_command(self, *parts):
-        encoded = [str(part).encode("utf-8") for part in parts]
-        payload = f"*{len(encoded)}\r\n".encode("ascii")
-        for part in encoded:
-            payload += f"${len(part)}\r\n".encode("ascii") + part + b"\r\n"
-        return payload
-
-    def _read_line(self, sock):
-        data = b""
-        while not data.endswith(b"\r\n"):
-            chunk = sock.recv(1)
-            if not chunk:
-                raise ConnectionError("conexão Redis encerrada")
-            data += chunk
-        return data[:-2]
-
-    def _read_response(self, sock):
-        marker = sock.recv(1)
-        if not marker:
-            raise ConnectionError("resposta Redis vazia")
-        if marker == b"+":
-            return self._read_line(sock).decode("utf-8")
-        if marker == b"-":
-            raise RuntimeError(self._read_line(sock).decode("utf-8"))
-        if marker == b":":
-            return int(self._read_line(sock))
-        if marker == b"$":
-            length = int(self._read_line(sock))
-            if length == -1:
-                return None
-            payload = b""
-            while len(payload) < length:
-                payload += sock.recv(length - len(payload))
-            sock.recv(2)
-            return payload.decode("utf-8")
-        if marker == b"*":
-            length = int(self._read_line(sock))
-            if length == -1:
-                return None
-            return [self._read_response(sock) for _ in range(length)]
-        raise RuntimeError(f"resposta Redis não suportada: {marker!r}")
-
-    def _execute(self, *parts):
-        with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
-            if self.db:
-                sock.sendall(self._encode_command("SELECT", self.db))
-                self._read_response(sock)
-            sock.sendall(self._encode_command(*parts))
-            return self._read_response(sock)
-
-    def _select_db(self):
-        self._execute("PING")
+        self.redis.ping()
 
     def add_event(self, identifier, event):
-        """Usa ZSET para histórico temporal eficiente."""
-        key = f"sentinela:history:{identifier}"
-        now = float(event.get("seen_at", time.time()))
-        event_payload = json.dumps(event, ensure_ascii=False)
+        key = f"{self.prefix}{identifier}"
+        event_json = json.dumps(event, ensure_ascii=False)
+        # XADD com MAXLEN para controle de memória
+        self.redis.xadd(key, {"payload": event_json}, maxlen=1000, approximate=True)
+        # TTL obrigatório para attack sessions (2x a janela de correlação)
+        self.redis.expire(key, self.window_seconds * 2)
         
-        self._execute("ZADD", key, now, event_payload)
-        self._execute("ZREMRANGEBYSCORE", key, "-inf", now - self.window_seconds)
-        self._execute("EXPIRE", key, self.window_seconds * 2)
+        now_ms = int(time.time() * 1000)
+        start_ms = now_ms - (self.window_seconds * 1000)
         
-        raw_events = self._execute("ZRANGE", key, 0, -1)
-        return [json.loads(e) for e in raw_events] if raw_events else []
+        # Trim por tempo (eventos mais antigos que 2 janelas)
+        trim_id = f"{now_ms - (self.window_seconds * 2000)}-0"
+        try:
+            self.redis.xtrim(key, minid=trim_id, approximate=True)
+        except Exception:
+            pass # Pode falhar em versões antigas de Redis
+            
+        raw_events = self.redis.xrange(key, min=f"{start_ms}-0", max="+")
+        return [json.loads(data["payload"]) for _, data in raw_events]
 
     def get_full_session(self, identifier):
-        key = f"sentinela:history:{identifier}"
-        raw_events = self._execute("ZRANGE", key, 0, -1)
-        return [json.loads(e) for e in raw_events] if raw_events else []
+        key = f"{self.prefix}{identifier}"
+        raw_events = self.redis.xrange(key, min="-", max="+")
+        return [json.loads(data["payload"]) for _, data in raw_events]
 
     def record_aggregate(self, aggregation_key, status, alert):
         key = f"{self.aggregate_prefix}{aggregation_key}"
         now = float(alert["seen_at"])
-        raw_bucket = self._execute("GET", key)
+        raw_bucket = self.redis.get(key)
         entries = json.loads(raw_bucket) if raw_bucket else []
         entries = [normalize_aggregate_entry(item) for item in entries if now - float(item.get("seen_at", 0)) <= ALERT_AGGREGATION_WINDOW_SECONDS]
         entries.append(normalize_aggregate_entry(alert))
-        self._execute("SET", key, json.dumps(entries, ensure_ascii=False), "EX", ALERT_AGGREGATION_WINDOW_SECONDS * 2)
+        self.redis.set(key, json.dumps(entries, ensure_ascii=False), ex=ALERT_AGGREGATION_WINDOW_SECONDS * 2)
         return summarize_bucket(aggregation_key, status, entries, alert)
 
     def add_to_set(self, key, value, window_seconds):
-        self._execute("SADD", key, value)
-        self._execute("EXPIRE", key, window_seconds)
-        return set(self._execute("SMEMBERS", key) or [])
+        self.redis.sadd(key, value)
+        self.redis.expire(key, window_seconds)
+        return self.redis.smembers(key)
 
     def increment_counter(self, key, window_seconds):
-        count = self._execute("INCR", key)
+        count = self.redis.incr(key)
         if count == 1:
-            self._execute("EXPIRE", key, window_seconds)
+            self.redis.expire(key, window_seconds)
         return int(count or 0)
 
 
 def create_state_store():
     if REDIS_STATE_ENABLED:
         try:
-            store = RedisCorrelationStore(REDIS_URL, STATE_WINDOW_SECONDS)
-            log_json("INFO", "State store Redis habilitado", redis_url=REDIS_URL)
+            store = RedisStreamCorrelationStore(REDIS_URL, STATE_WINDOW_SECONDS)
+            log_json("INFO", "State store Redis Streams habilitado", redis_url=REDIS_URL)
             return store
         except Exception as exc:
             log_json("WARN", "Redis indisponível; usando state store em memória", error=str(exc))
@@ -434,6 +417,8 @@ def load_rules():
 
     compiled_rules = []
     for r in raw_rules:
+        if r.get("enabled", True) is False:
+            continue
         try:
             compiler = SigmaRuleCompiler(r)
             compiled_rules.append(compiler)
@@ -531,8 +516,11 @@ def normalize_port(port):
 
 def update_state(log):
     ip = normalize_source_ip(log)
-    campaign_id = log.get("campaign_id")
-    identifier = campaign_id if campaign_id else ip
+    tenant_id = log.get("tenant_id") or DEFAULT_TENANT_ID
+    campaign_id = log.get("campaign_id") or "no-campaign"
+    
+    # identifier para Redis Stream: attack_session por tenant_id/source_ip/campaign_id
+    identifier = f"{tenant_id}:{ip}:{campaign_id}"
     
     now = time.time()
     current = {
@@ -544,7 +532,7 @@ def update_state(log):
         "username": normalize_username(log.get("username") or log.get("user")),
         "tactic": log.get("tactic"),
         "technique": log.get("technique"),
-        "campaign_id": campaign_id,
+        "campaign_id": log.get("campaign_id"),
         "campaign_name": log.get("campaign_name")
     }
     return STATE_STORE.add_event(identifier, current)
@@ -1140,6 +1128,10 @@ def build_alert(log, status, risk, events, risk_reasons, auto_response, simulate
     }
     alert["human_summary"] = human_summary_for_alert(alert)
     alert["explanation"] = alert["human_summary"]
+    alert["event_schema_version"] = EVENT_SCHEMA_VERSION
+    alert["pipeline_priority"] = event_priority(alert)
+    alert["pipeline_retry_count"] = int(log.get("pipeline_retry_count", 0) or 0)
+    alert["max_retry_count"] = PIPELINE_MAX_RETRIES
     return alert
 
 
@@ -1147,6 +1139,11 @@ def create_consumer():
     global SERVICE_READY
     attempt = 0
     while True:
+        if not PIPELINE_BREAKER.allow():
+            delay = max(1.0, PIPELINE_BREAKER.remaining_seconds())
+            log_json("WARN", "Circuit breaker aberto no rule_engine; aguardando Kafka", breaker=PIPELINE_BREAKER.snapshot(), retry_in_seconds=delay)
+            time.sleep(delay)
+            continue
         try:
             consumer = KafkaConsumer(
                 RAW_LOGS_TOPIC,
@@ -1162,13 +1159,15 @@ def create_consumer():
             log_json("INFO", "Kafka conectado", topic=RAW_LOGS_TOPIC)
             SERVICE_READY = True
             SERVICE_READY_GAUGE.labels(service="rule_engine").set(1)
+            PIPELINE_BREAKER.record_success()
             return consumer
         except Exception as exc:
             SERVICE_READY = False
             SERVICE_READY_GAUGE.labels(service="rule_engine").set(0)
             SERVICE_FAILURES.labels(service="rule_engine").inc()
+            PIPELINE_BREAKER.record_failure()
             delay = backoff_delay(attempt)
-            log_json("WARN", "Aguardando Kafka consumer", error=str(exc), retry_in_seconds=delay)
+            log_json("WARN", "Aguardando Kafka consumer", error=str(exc), retry_in_seconds=delay, breaker=PIPELINE_BREAKER.snapshot())
             time.sleep(delay)
             attempt += 1
 
@@ -1177,6 +1176,11 @@ def create_producer():
     global SERVICE_READY
     attempt = 0
     while True:
+        if not PIPELINE_BREAKER.allow():
+            delay = max(1.0, PIPELINE_BREAKER.remaining_seconds())
+            log_json("WARN", "Circuit breaker aberto no rule_engine; aguardando Kafka producer", breaker=PIPELINE_BREAKER.snapshot(), retry_in_seconds=delay)
+            time.sleep(delay)
+            continue
         try:
             producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
@@ -1185,13 +1189,15 @@ def create_producer():
             log_json("INFO", "Kafka producer conectado", topic=ALERTS_TOPIC)
             SERVICE_READY = True
             SERVICE_READY_GAUGE.labels(service="rule_engine").set(1)
+            PIPELINE_BREAKER.record_success()
             return producer
         except Exception as exc:
             SERVICE_READY = False
             SERVICE_READY_GAUGE.labels(service="rule_engine").set(0)
             SERVICE_FAILURES.labels(service="rule_engine").inc()
+            PIPELINE_BREAKER.record_failure()
             delay = backoff_delay(attempt)
-            log_json("WARN", "Aguardando Kafka producer", error=str(exc), retry_in_seconds=delay)
+            log_json("WARN", "Aguardando Kafka producer", error=str(exc), retry_in_seconds=delay, breaker=PIPELINE_BREAKER.snapshot())
             time.sleep(delay)
             attempt += 1
 
@@ -1230,30 +1236,20 @@ def process_log(log, producer, rules):
         auto_response = "simulated_block"
     
     alert = build_alert(log, status, risk, events, all_reasons, auto_response, simulated_block, threat, correlation_key, correlation_reason, rules, correlation_data)
+    alert["pipeline_priority"] = event_priority(alert)
     
     # SOAR: Decisão de Resposta Automática
     alert["auto_response_actions"] = RESPONSE_ENGINE.decide_response(alert)
-    
-    # Enriquecimento MITRE dinâmico
-    mitre_map = get_mitre_mapping(alert.get("event_type"))
-    if mitre_map.get("id"):
-        alert["mitre_id"] = mitre_map["id"]
-        alert["mitre_name"] = mitre_map["name"]
-        alert["mitre_tactic"] = mitre_map["tactic"]
-        if not any(m.get("id") == mitre_map["id"] for m in alert.get("mitre_techniques", [])):
-            alert.setdefault("mitre_techniques", []).append({
-                "id": mitre_map["id"],
-                "name": mitre_map["name"],
-                "tactic": mitre_map["tactic"]
-            })
     
     # Distributed Tracing Context Injection
     headers = {}
     inject_context(headers)
     kafka_headers = [(k, v.encode("utf-8")) for k, v in headers.items()]
     
-    producer.send(ALERTS_TOPIC, alert, headers=kafka_headers)
+    target_topic = get_priority_topic(ALERTS_TOPIC, alert.get("pipeline_priority"))
+    producer.send(target_topic, alert, headers=kafka_headers)
     producer.flush(timeout=2)
+    PIPELINE_BREAKER.record_success()
     ALERTS_PUBLISHED.inc()
     if alert.get("alert_type") in {"incident_candidate", "campaign"} or int(alert.get("score_final") or 0) >= 70:
         INCIDENTS_GENERATED.labels(severity=alert.get("severity", "UNKNOWN")).inc()
@@ -1270,6 +1266,7 @@ def process_log(log, producer, rules):
         ip=ip,
         status=status,
         risco=risk,
+        topic=target_topic,
         service=alert["service"],
         port=alert["port"],
         event_type=alert["event_type"],
@@ -1283,10 +1280,14 @@ def process_log(log, producer, rules):
         tenant_id=alert.get("tenant_id"),
         correlation_id=alert.get("correlation_id"),
         campaign_id=alert.get("campaign_id"),
+        pipeline_priority=alert.get("pipeline_priority"),
+        event_schema_version=alert.get("event_schema_version"),
     )
 
 
 def build_dlq_event(original_event, exc, failed_service="rule_engine", source_topic=RAW_LOGS_TOPIC, target_topic=ALERTS_TOPIC, retry_count=0):
+    priority = event_priority(original_event)
+    next_retry_at = epoch_to_iso(time.time() + retry_backoff_seconds(retry_count, base_ms=PIPELINE_RETRY_BACKOFF_MS, max_seconds=MAX_BACKOFF_SECONDS, priority=priority, seed=(original_event or {}).get("event_id")))
     return {
         "original_event": original_event,
         "error_message": str(exc),
@@ -1294,6 +1295,11 @@ def build_dlq_event(original_event, exc, failed_service="rule_engine", source_to
         "failed_service": failed_service,
         "failed_at": now_iso(),
         "retry_count": retry_count,
+        "max_retry_count": PIPELINE_MAX_RETRIES,
+        "next_retry_at": next_retry_at,
+        "retry_strategy": "exponential_backoff",
+        "pipeline_priority": priority,
+        "event_schema_version": EVENT_SCHEMA_VERSION,
         "tenant_id": (original_event or {}).get("tenant_id") or DEFAULT_TENANT_ID,
         "correlation_id": (original_event or {}).get("correlation_id") or (original_event or {}).get("event_id"),
         "source_topic": source_topic,
@@ -1315,18 +1321,25 @@ def publish_dlq(producer, dlq_event):
 def process_log_with_retry(log, producer, rules):
     last_exc = None
     for attempt in range(PIPELINE_MAX_RETRIES + 1):
+        if not PIPELINE_BREAKER.allow():
+            delay = max(1.0, PIPELINE_BREAKER.remaining_seconds())
+            log_json("WARN", "Circuit breaker aberto no rule_engine", breaker=PIPELINE_BREAKER.snapshot(), retry_in_seconds=delay, tenant_id=log.get("tenant_id"), correlation_id=log.get("correlation_id"))
+            time.sleep(delay)
+            continue
         try:
             log.setdefault("pipeline_retry_count", attempt)
             process_log(log, producer, rules)
+            PIPELINE_BREAKER.record_success()
             return True
         except Exception as exc:
             last_exc = exc
             SERVICE_FAILURES.labels(service="rule_engine").inc()
+            PIPELINE_BREAKER.record_failure()
             if attempt >= PIPELINE_MAX_RETRIES:
                 publish_dlq(producer, build_dlq_event(log, exc, retry_count=attempt))
                 return False
-            delay = PIPELINE_RETRY_BACKOFF_MS / 1000 * (2 ** attempt)
-            log_json("WARN", "Retry estruturado no rule_engine", retry_count=attempt + 1, retry_in_seconds=delay, error=str(exc), tenant_id=log.get("tenant_id"), correlation_id=log.get("correlation_id"))
+            delay = retry_backoff_seconds(attempt, base_ms=PIPELINE_RETRY_BACKOFF_MS, max_seconds=MAX_BACKOFF_SECONDS, priority=event_priority(log), seed=log.get("event_id") or log.get("correlation_id"))
+            log_json("WARN", "Retry estruturado no rule_engine", retry_count=attempt + 1, retry_in_seconds=delay, error=str(exc), tenant_id=log.get("tenant_id"), correlation_id=log.get("correlation_id"), pipeline_priority=event_priority(log))
             time.sleep(delay)
     publish_dlq(producer, build_dlq_event(log, last_exc or RuntimeError("unknown"), retry_count=PIPELINE_MAX_RETRIES))
     return False

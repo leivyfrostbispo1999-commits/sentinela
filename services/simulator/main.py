@@ -142,6 +142,9 @@ def build_event(ip, event_type, port, scenario="generic", **extra):
         "step_id": extra.get("step_id"),
         "tactic": extra.get("tactic"),
         "technique": extra.get("technique"),
+        "attack_session_id": extra.get("attack_session_id") or extra.get("campaign_id"),
+        "technique_id": extra.get("technique_id") or extra.get("technique"),
+        "stage": extra.get("stage") or extra.get("step_id"),
         "api_call": extra.get("api_call"),
     }
 

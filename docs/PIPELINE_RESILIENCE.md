@@ -17,6 +17,12 @@ PIPELINE_RETRY_BACKOFF_MS=500
 
 `rule_engine` e `alert_sink` registram `pipeline_retry_count` no payload durante retries. Falhas finais são enviadas para a DLQ.
 
+O retry agora usa backoff exponencial com prioridade:
+
+- eventos `high` voltam mais cedo que `medium` e `low`
+- o payload carrega `event_schema_version`, `pipeline_priority`, `max_retry_count` e `next_retry_at`
+- o breaker do pipeline abre após falhas consecutivas para evitar loop agressivo de reconexão
+
 ## Dead-letter queue
 
 Tópico padrão:
@@ -38,7 +44,12 @@ Payload DLQ:
   "tenant_id": "default",
   "correlation_id": "cid",
   "source_topic": "raw_logs",
-  "target_topic": "security_alerts"
+  "target_topic": "security_alerts",
+  "pipeline_priority": "high",
+  "event_schema_version": "sentinela.event.v2",
+  "max_retry_count": 3,
+  "next_retry_at": "2026-05-06T00:00:05Z",
+  "retry_strategy": "exponential_backoff"
 }
 ```
 
@@ -65,6 +76,10 @@ PIPELINE_POLL_INTERVAL_MS=250
 ```
 
 Esses limites evitam consumo ilimitado e dão tempo para o worker respirar entre ciclos de polling.
+
+## Circuit breaker
+
+`rule_engine` e `alert_sink` mantêm um breaker local com recuperação temporizada. Quando o backend fica instável, o serviço pausa novas tentativas por um intervalo curto antes de reabrir a execução.
 
 ## Idempotência
 

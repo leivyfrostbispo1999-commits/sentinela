@@ -17,3 +17,8 @@ Para o próximo ciclo evolutivo do Sentinela, visando maior escalabilidade e cen
 - **Alert Correlation OOTB:** Correlação automática multicanal.
 - **Incident Timeline:** Exibição gráfica e cronológica de intrusão usando a API.
 - **Políticas Avançadas de Retenção:** Jobs programados (CronJobs/Kubernetes) em vez de scripts manuais.
+
+## 5. Confiabilidade do Pipeline
+- **Retry inteligente:** backoff exponencial com prioridade por severidade.
+- **Circuit breaker:** pausa temporária quando o backend fica instável.
+- **Metadados de versão:** versionamento de eventos e `next_retry_at` no payload.
