@@ -1,157 +1,153 @@
-# SENTINELA AI-native Security Operations Platform
+# SENTINELA Oracle Ops
 
-O SENTINELA é uma plataforma avançada de detecção e resposta (XDR) potencializada por Inteligência Artificial, Grafos de Ameaça e Copilot SOC.
+Operação do SENTINELA em Oracle Cloud Free Tier, com foco em produção micro estável, automação de recuperação, governança de segurança e preparação para Kubernetes enxuto com k3s.
 
-## Acesso público
+## Acesso
 
-Ambiente Oracle atual: https://levi-sentinela.duckdns.org/
+Ambiente Oracle atual:
 
-## 🚀 Capacidades Enterprise
+https://levi-sentinela.duckdns.org/
 
-- **AI-native XDR**: Ingestão e correlação de telemetria de Endpoint, Rede, Cloud e Identidade.
-- **Threat Graph Platform**: Modelagem completa de ativos e ameaças em Neo4j (Attack Path Inference).
-- **Autonomous SOC**: Resposta automática governada por humanos com playbooks de mitigação.
-- **Security Copilot**: Assistente de IA Generativa para resumo de incidentes e hunting assistido.
-- **Real ML Engine**: Detecção de anomalias via Isolation Forest (scikit-learn) em tempo real.
-- **Flink CEP**: Complex Event Processing para detecção de sequências multiestágio da Kill Chain.
+Este é o endereço público correto do dashboard. Endereços `localhost` neste repositório são apenas para execução local de desenvolvimento.
 
-## 🛠️ Arquitetura Modular (Profiles)
+## Estado Operacional
 
-O SENTINELA suporta execução segmentada para otimização de recursos locais.
+Produção micro atual:
 
-```text
-📦 SENTINELA PLATFORM
-├── 🔹 CORE (Essencial)
-│   ├── API & Dashboard
-│   ├── Kafka & Redis
-│   └── Rule Engine & Enrichment
-├── 🔸 ANALYTICS (IA & Stream)
-│   ├── Apache Flink
-│   ├── AI Engine (ML Real)
-│   └── UEBA Engine
-├── 🟣 GRAPH (Intelligence)
-│   ├── Neo4j Database
-│   └── Graph Relationship Engine
-└── 🔍 SEARCH (Storage)
-    └── OpenSearch Cold Storage
-```
+- Oracle VM `SENTINELA-AMD-TEST`
+- Docker Compose enxuto
+- Dashboard web
+- Dashboard API
+- PostgreSQL
+- Redis
+- Autenticação habilitada
+- Refresh token
+- Expiração de sessão
+- Gestão de usuários
+- Auditoria operacional
+- Ciclo de vida de alertas
+- Isolamento por tenant no backend
 
-### Como Iniciar por Módulo (UX Otimizada)
+Preparado para próximo nível:
 
-Utilize os scripts automatizados para subir apenas o que você precisa:
+- k3s em Oracle Free Tier
+- PostgreSQL e Redis persistentes
+- NATS para fila leve
+- Prometheus e Grafana enxutos
+- Ingress com TLS
+- RBAC e NetworkPolicy
+- HPA e PodDisruptionBudget
+- Overlays Kubernetes para `dev`, `prod`, `oracle-k3s` e `mtls-linkerd`
+- CI/CD com validação e build de containers
+
+Limitação atual:
+
+- A conta Oracle está inscrita apenas em `sa-saopaulo-1`.
+- Tentativas de criar `VM.Standard.A1.Flex` falharam com `Out of host capacity`.
+- Tentativas de assinar `us-ashburn-1` e `us-phoenix-1` falharam com `TenantCapacityExceeded`.
+- O cluster k3s está pronto no repositório, mas depende da Oracle liberar capacidade ARM.
+
+## Execução Local
+
+Pré-requisitos:
+
+- Docker Desktop ou Docker Engine
+- Docker Compose
+- Python 3.11+
+
+Subir o ambiente local:
 
 ```powershell
-# Sobe o essencial (Recomendado para uso diário)
-./scripts/infra/start-sentinela.ps1 -Profile core
-
-# Sobe o ambiente de IA e Stream Processing
-./scripts/infra/start-sentinela.ps1 -Profile analytics
-
-# Sobe o Grafo de Ameaças e XDR Path Analysis
-./scripts/infra/start-sentinela.ps1 -Profile graph
-
-# Sobe o "God Mode" completo (Atenção: Exige 12GB+ RAM)
-./scripts/infra/start-sentinela.ps1 -Profile full
+docker compose up -d --build
 ```
 
-*Nota: Use o parâmetro `-Build` para forçar a reconstrução das imagens.*
+Abrir dashboard local:
 
-### 🛠️ Recuperar Docker Desktop travado via terminal
-
-Caso encontre o erro "Docker Desktop is unable to start", utilize o protocolo de auto-recuperação:
-
-1. Abra o PowerShell como Administrador.
-2. Permita a execução de scripts (se necessário):
-   ```powershell
-   Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-   ```
-3. Execute o script de recuperação para o perfil desejado:
-   ```powershell
-   # Recupera e sobe o essencial (CORE)
-   .\scripts\infra\recover-docker.ps1 -Profile core
-
-   # Recupera e reconstrói a stack completa (FULL)
-   .\scripts\infra\recover-docker.ps1 -Profile full -Rebuild
-   ```
-
----
-
-### 🔍 Troubleshooting: localhost:8080 ERR_CONNECTION_REFUSED
-
-Se o Dashboard não carregar no navegador, siga este roteiro de diagnóstico:
-
-1. **Verifique se o perfil CORE está ativo**:
-   ```powershell
-   ./scripts/infra/start-sentinela.ps1 -Profile core
-   ```
-2. **Execute o script de diagnóstico**:
-   ```powershell
-   ./scripts/infra/check-dashboard.ps1
-   ```
-3. **Reconstrua o frontend se necessário**:
-   ```powershell
-   docker compose --profile core up -d --build --force-recreate
-   ```
-4. **Analise os logs de erro**:
-   ```powershell
-   docker compose logs dashboard_web --tail=100
-   docker compose logs dashboard_api --tail=100
-   ```
-
----
-
-## 🛠️ Tecnologias
-- **Data**: Kafka, Apache Flink, Redis.
-- **Storage**: PostgreSQL (Hot), OpenSearch (Cold), Neo4j (Graph).
-- **AI/ML**: scikit-learn, LLM Abstraction.
-- **Infra**: Docker, Kubernetes, Terraform.
-
-## 📁 Documentação Avançada
-- [Arquitetura AI-native](docs/ARCHITECTURE.md)
-- [Guia Operacional](docs/OPERATING_GUIDE.md)
-- [Threat Graph Model](docs/THREAT_GRAPH.md)
-- [Attack Path Intelligence](docs/ATTACK_PATH_INTELLIGENCE.md)
-- [Autonomous SOC & SOAR](docs/AUTONOMOUS_SOC.md)
-- [Security Copilot](docs/SECURITY_COPILOT.md)
-- [AI Engine & ML](docs/AI_ENGINE.md)
-
-## 🛠️ Como Iniciar Localmente
-
-### Pré-requisitos
-- Docker & Docker Compose
-- Python 3.11+ (para scripts locais)
-
-### Subir o Ambiente
-```bash
-docker compose up --build -d
+```text
+http://localhost:8080
 ```
 
-### Rodar Replay Ofensivo
-```bash
-python scripts/replay_attack.py --delay 0.5
+Verificar serviços:
+
+```powershell
+docker compose ps
+docker compose logs --tail=120
 ```
 
-### Executar Testes de Performance
-```bash
-python tools/performance/load_generator.py
+Executar testes:
+
+```powershell
+py -m pytest -q
 ```
 
-### Visualizar Dashboard
-Acesse o ambiente Oracle publicado: [https://levi-sentinela.duckdns.org/](https://levi-sentinela.duckdns.org/)
+## Oracle k3s
 
-Para execução local, use o frontend em [http://localhost:8080](http://localhost:8080) depois de subir o Docker Compose.
+Runbook principal:
 
-## 📁 Estrutura do Projeto
-- `services/`: Microsserviços (Rule Engine, UEBA, Lifecycle, Dashboard API, etc.).
-- `detections/`: Regras de detecção versionadas em YAML.
-- `infra/`: Manifests K8s, Terraform AWS e configurações de DB/Nginx.
-- `tools/`: Ferramentas de performance e utilitários.
-- `scripts/`: Scripts de replay de ataque e manutenção.
+```text
+ops/oci/RUNBOOK_K3S_ORACLE.md
+```
 
-## 🛡️ Segurança e Qualidade
-- CI/CD integrado com Bandit (lint de segurança) e Trivy (escaneamento de vulnerabilidades).
-- Testes unitários e de integração via Pytest.
-- Auditoria completa de ações SOAR.
+Overlay Free Tier:
 
----
-*Este projeto é para fins educacionais e de laboratório SOC.*
+```text
+infra/k8s/overlays/oracle-k3s
+```
+
+Scripts principais:
+
+```text
+ops/oci/k3s_server_install.sh
+ops/oci/k3s_worker_join.sh
+ops/oci/k3s_label_nodes.sh
+ops/oci/k3s_install_addons.sh
+ops/oci/k3s_deploy_sentinela.sh
+```
+
+Arquivos OCI auxiliares:
+
+```text
+ops/oci/sentinela-arm-source-50gb.json
+ops/oci/sentinela-arm-shape-1x4.json
+ops/oci/sentinela-security-ingress-k3s.json
+```
+
+## Estrutura
+
+- `services/`: API, frontend, rule engine, enrichment, alert sink e demais serviços.
+- `infra/db/`: schema e inicialização do PostgreSQL.
+- `infra/k8s/`: manifests e overlays Kubernetes.
+- `ops/`: scripts operacionais, recuperação, diagnóstico e OCI.
+- `docs/`: documentação de arquitetura, segurança, observabilidade e evolução.
+- `.github/workflows/`: CI e release de containers.
+
+## Segurança
+
+O repositório não deve armazenar segredos reais. Use variáveis de ambiente, secrets do GitHub Actions ou Kubernetes Secrets.
+
+O overlay `oracle-k3s` não aplica `secret.example.yaml`; o deploy cria `sentinela-secrets` no cluster quando necessário e salva as credenciais iniciais no host em:
+
+```text
+~/.sentinela-k3s-credentials
+```
+
+## Validações Recentes
+
+Validações executadas antes da publicação:
+
+```text
+83 passed
+yaml-ok 35
+```
+
+## Roadmap Pragmático
+
+1. Manter a produção micro estável na VM atual.
+2. Continuar tentando ARM Ampere em `sa-saopaulo-1` quando houver capacidade.
+3. Subir k3s single-node primeiro.
+4. Expandir para multi-node somente quando a Oracle liberar mais VMs ARM.
+5. Manter observabilidade leve para não exceder os limites do Free Tier.
+
+## Licença e Uso
+
+Projeto para laboratório SOC, estudo de segurança defensiva e evolução operacional cloud-native do SENTINELA.
