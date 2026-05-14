@@ -203,6 +203,7 @@
         .session-line {
             display: flex;
             justify-content: flex-end;
+            flex-wrap: wrap;
             gap: 10px;
             margin-top: 8px;
             color: var(--muted);
@@ -212,6 +213,27 @@
         .session-line strong { color: var(--cyan); }
         .session-line .offline { color: var(--orange); }
         .session-line .online { color: var(--green); }
+        .session-line .degraded { color: var(--yellow); }
+        .session-line .critical { color: var(--red); }
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 24px;
+            padding: 3px 8px;
+            border: 1px solid currentColor;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.035);
+            white-space: nowrap;
+        }
+        .status-pill::before {
+            content: "";
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 8px currentColor;
+        }
 
         .header-status { min-width: 260px; text-align: right; }
         .level { font-family: Consolas, monospace; font-size: 1.55rem; font-weight: 900; }
@@ -234,14 +256,45 @@
         }
         .critical-banner.show { display: block; }
 
-        .cards { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 14px; margin: 16px 0; }
-        .card { padding: 16px; min-height: 110px; }
+        .cards { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 16px; margin: 18px 0; }
+        .card { padding: 18px; min-height: 116px; }
         .card-label { color: var(--muted); font-size: 0.76rem; font-weight: 900; text-transform: uppercase; }
         .card-value { margin-top: 12px; color: var(--cyan); font-family: Consolas, monospace; font-size: 2.45rem; font-weight: 900; }
         .card.pulse {
             border-color: rgba(255, 64, 93, 0.45);
             animation: cardPulse 1.2s ease-out 2;
         }
+        .ops-strip {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(140px, 1fr));
+            gap: 12px;
+            margin: 0 0 18px;
+        }
+        .ops-item {
+            display: grid;
+            gap: 7px;
+            min-height: 78px;
+            padding: 13px 14px;
+            border: 1px solid rgba(101, 231, 255, 0.13);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.032);
+            font-family: Consolas, monospace;
+        }
+        .ops-label {
+            color: var(--muted);
+            font-size: 0.68rem;
+            font-weight: 900;
+            text-transform: uppercase;
+        }
+        .ops-value {
+            color: var(--cyan);
+            font-size: 0.92rem;
+            font-weight: 900;
+            overflow-wrap: anywhere;
+        }
+        .ops-item.ok .ops-value { color: var(--green); }
+        .ops-item.warn .ops-value { color: var(--yellow); }
+        .ops-item.fail .ops-value { color: var(--red); }
 
         .incident-panel {
             display: none;
@@ -493,13 +546,13 @@
         .live { color: var(--cyan); font-family: Consolas, monospace; font-size: 0.75rem; font-weight: 800; }
         .chart-box { height: 260px; padding: 16px; }
 
-        .analytics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
-        .rank-list { display: grid; gap: 10px; padding: 16px; }
+        .analytics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }
+        .rank-list { display: grid; gap: 12px; padding: 18px; }
         .rank-item {
             display: grid;
             grid-template-columns: 1fr auto;
-            gap: 8px;
-            padding: 10px;
+            gap: 12px;
+            padding: 12px;
             border: 1px solid rgba(101, 231, 255, 0.12);
             border-radius: 6px;
             background: rgba(255, 255, 255, 0.03);
@@ -591,10 +644,44 @@
         .map-legend { display: grid; gap: 8px; padding: 0 16px 16px; color: var(--muted); font-family: Consolas, monospace; font-size: 0.78rem; }
 
         table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; border-bottom: 1px solid rgba(101, 231, 255, 0.10); text-align: left; vertical-align: top; }
+        th, td { padding: 14px; border-bottom: 1px solid rgba(101, 231, 255, 0.10); text-align: left; vertical-align: top; }
         th { position: sticky; top: 0; background: #09101c; color: var(--cyan); font-family: Consolas, monospace; font-size: 0.72rem; text-transform: uppercase; }
         tbody { font-size: 0.88rem; }
         .feed { max-height: 640px; overflow: auto; }
+        .empty-state {
+            display: grid;
+            gap: 7px;
+            padding: 14px;
+            border: 1px dashed rgba(101, 231, 255, 0.22);
+            border-radius: 7px;
+            background: rgba(101, 231, 255, 0.035);
+            color: var(--muted);
+            font-family: Consolas, monospace;
+            font-size: 0.82rem;
+        }
+        .empty-state strong { color: var(--cyan); }
+        .placeholder-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 12px;
+            border: 1px solid rgba(101, 231, 255, 0.10);
+            border-radius: 6px;
+            background: linear-gradient(90deg, rgba(101, 231, 255, 0.04), rgba(255, 255, 255, 0.025));
+            font-family: Consolas, monospace;
+            font-size: 0.82rem;
+        }
+        .placeholder-row span { color: var(--muted); }
+        .skeleton-line {
+            display: block;
+            width: 100%;
+            height: 10px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, rgba(101,231,255,0.10), rgba(101,231,255,0.22), rgba(101,231,255,0.10));
+            background-size: 220% 100%;
+            animation: skeletonPulse 1.8s ease-in-out infinite;
+        }
 
         .tag, .action {
             display: inline-flex;
@@ -620,6 +707,11 @@
         .history-mode .incident-panel { display: none !important; }
         .history-mode .map-column { display: none; }
         .history-mode .grid { grid-template-columns: 1fr; grid-template-areas: "analytics" "feed"; }
+        #ai-xdr-section > div,
+        #saas-section > div,
+        #campaigns-section > div {
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
+        }
 
         .drawer-backdrop {
             position: fixed;
@@ -708,20 +800,32 @@
                 transform: translateY(0);
             }
         }
+        @keyframes skeletonPulse {
+            0% { background-position: 100% 0; }
+            100% { background-position: -100% 0; }
+        }
 
         @media (max-width: 1120px) {
             header, .grid, .analytics-grid { grid-template-columns: 1fr; }
             .grid { grid-template-areas: "analytics" "map" "feed"; }
             .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .ops-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .header-status { text-align: left; }
             .toolbar { justify-content: flex-start; }
         }
         @media (max-width: 680px) {
             .shell { width: min(100% - 20px, 1600px); }
             .cards { grid-template-columns: 1fr; }
+            .ops-strip { grid-template-columns: 1fr; }
             .toolbar .select, .toolbar .search, .toolbar .button { width: 100%; flex-basis: 100%; }
             .login-bar { grid-template-columns: 1fr; }
             th, td { padding: 10px 8px; font-size: 0.78rem; }
+            table { min-width: 880px; }
+            .feed { max-height: 520px; overflow-x: auto; }
+            .panel-head { align-items: flex-start; flex-direction: column; }
+            .card { min-height: 96px; padding: 14px; }
+            .card-value { font-size: 2rem; overflow-wrap: anywhere; }
+            .rank-item, .placeholder-row { grid-template-columns: 1fr; }
             .map-stage { height: 380px; }
             .incident-overview { grid-template-columns: 1fr; }
             .incident-progress { grid-template-columns: 1fr; }
@@ -743,7 +847,7 @@
             <aside class="header-status">
                 <form class="login-bar" id="loginForm">
                     <input class="login-input" id="usernameInput" autocomplete="username" value="admin" aria-label="Usuário">
-                    <input class="login-input" id="passwordInput" type="password" autocomplete="current-password" value="sentinela" aria-label="Senha">
+                    <input class="login-input" id="passwordInput" type="password" autocomplete="current-password" placeholder="senha" aria-label="Senha">
                     <button class="button" id="loginButton" type="submit">Login</button>
                 </form>
                 <div class="toolbar">
@@ -781,10 +885,11 @@
                 </div>
                 <div class="muted">Nível de Ameaça</div>
                 <div class="level low" id="threatLevel">LOW</div>
-                <div class="muted" id="lastUpdate">Aguardando telemetria</div>
+                <div class="muted" id="lastUpdate">Console inicializando</div>
                 <div class="session-line">
                     <span id="sessionInfo">sessão local</span>
-                    <strong id="wsStatus" class="offline">WS offline</strong>
+                    <strong id="apiStatus" class="status-pill degraded">API checando</strong>
+                    <strong id="wsStatus" class="status-pill degraded">WS conectando</strong>
                 </div>
             </aside>
         </header>
@@ -798,6 +903,14 @@
             <article class="card"><div class="card-label" id="cardLabelBlocks">Maior score</div><div class="card-value" id="bloqueios">0</div></article>
             <article class="card"><div class="card-label" id="cardLabelTi">MITRE dominante</div><div class="card-value" id="tiMatches">N/D</div></article>
             <article class="card"><div class="card-label">Último replay</div><div class="card-value" id="lastReplayCard">N/D</div></article>
+        </section>
+
+        <section class="ops-strip" aria-label="Observabilidade operacional">
+            <article class="ops-item warn" id="opsApi"><div class="ops-label">API</div><div class="ops-value" id="opsApiValue">checando</div></article>
+            <article class="ops-item warn" id="opsWs"><div class="ops-label">WebSocket</div><div class="ops-value" id="opsWsValue">conectando</div></article>
+            <article class="ops-item warn" id="opsMemory"><div class="ops-label">RAM disponível</div><div class="ops-value" id="opsMemoryValue">aguardando métrica</div></article>
+            <article class="ops-item warn" id="opsDisk"><div class="ops-label">Disco raiz</div><div class="ops-value" id="opsDiskValue">aguardando métrica</div></article>
+            <article class="ops-item warn" id="opsUptime"><div class="ops-label">Uptime host</div><div class="ops-value" id="opsUptimeValue">aguardando métrica</div></article>
         </section>
 
         <section class="panel incident-panel" id="incidentPanel">
@@ -845,9 +958,7 @@
                 </div>
                 <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
                     <h3 class="font-bold mb-4" style="color: var(--cyan);">Autonomous SOC Status</h3>
-                    <div id="soar-status" class="space-y-2">
-                        <p class="muted italic">Aguardando execução de playbooks...</p>
-                    </div>
+                    <div id="soar-status" class="space-y-2"></div>
                 </div>
             </div>
         </section>
@@ -871,9 +982,7 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                 <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
                     <h3 class="font-bold mb-4" style="color: var(--green);">Usage & Billing</h3>
-                    <div id="billing-info">
-                        <p class="muted italic">Carregando dados de faturamento...</p>
-                    </div>
+                    <div id="billing-info"></div>
                 </div>
                 <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
                     <h3 class="font-bold mb-4" style="color: var(--green);">Customer Onboarding</h3>
@@ -892,9 +1001,7 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                 <div style="background: rgba(255,255,255,0.03); p-6 rounded shadow border-left: 4px solid var(--cyan); padding: 15px;">
                     <h3 class="font-bold mb-4" style="color: var(--cyan); margin-bottom: 10px;">Matriz de Táticas (Heatmap)</h3>
-                    <div id="mitre-heatmap" style="display: flex; flex-wrap: wrap; gap: 8px;">
-                        <p class="muted italic">Carregando táticas...</p>
-                    </div>
+                    <div id="mitre-heatmap" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
                 </div>
                 <div style="background: rgba(255,255,255,0.03); p-6 rounded shadow border-left: 4px solid var(--yellow); padding: 15px;">
                     <h3 class="font-bold mb-4" style="color: var(--yellow); margin-bottom: 10px;">Ações SOAR Pendentes</h3>
@@ -991,7 +1098,7 @@
                 </div>
                 <div class="map-legend">
                     <div>Destino: Brasil / Salvador</div>
-                    <div id="mapLast">Aguardando novo alerta</div>
+                    <div id="mapLast">Sensores em baseline operacional</div>
                 </div>
             </section>
 
@@ -1016,7 +1123,7 @@
                                 <th id="feedHeadAction">Playbook</th>
                             </tr>
                         </thead>
-                        <tbody id="feedBody"><tr><td colspan="8">Carregando eventos...</td></tr></tbody>
+                        <tbody id="feedBody"></tbody>
                     </table>
                 </div>
             </section>
@@ -1046,6 +1153,8 @@
         const RULES_URL = `${API_ORIGIN}/rules`;
         const METRICS_URL = `${API_ORIGIN}/metrics/summary`;
         const AUTH_URL = `${API_ORIGIN}/auth/token`;
+        const READY_URL = `${API_ORIGIN}/ready`;
+        const HOST_METRICS_URL = `${API_ORIGIN}/runtime/host_metrics.json`;
         const WS_URL = `${WS_ORIGIN}/ws/alerts`;
         const LEGACY_API_TOKEN = 'sentinela-demo-token';
         const origins = [
@@ -1070,11 +1179,150 @@
         let dashboardMode = 'demo';
         let session = JSON.parse(localStorage.getItem('sentinelaSession') || 'null');
         let wsClient;
+        let wsReconnectTimer;
+        let apiState = { online: false, optionalFailures: 0, lastOk: null };
+        let optionalRefreshAt = 0;
+        let opsRefreshAt = 0;
+
+        const demoSignals = [
+            { label: 'sensor-edge-01', value: 'coletando', tone: 'var(--green)' },
+            { label: 'correlation-store', value: 'janela 5m', tone: 'var(--cyan)' },
+            { label: 'playbooks', value: 'simulados', tone: 'var(--yellow)' }
+        ];
+        const fallbackMitre = ['TA0001 Initial Access', 'TA0003 Persistence', 'TA0005 Defense Evasion', 'TA0008 Lateral Movement'];
+        const fallbackActions = [
+            ['PB-SOC-001', 'triagem simulada pronta'],
+            ['PB-SOC-004', 'contenção exige aprovação'],
+            ['PB-REPORT', 'evidências exportáveis']
+        ];
 
         const el = id => document.getElementById(id);
         const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
         const risk = alert => Number.parseInt(alert.score_breakdown?.final_score ?? alert.score_final ?? alert.risco ?? alert.threat_score, 10) || 0;
         const authHeaders = () => session?.token ? { 'Authorization': `Bearer ${session.token}` } : { 'X-SENTINELA-TOKEN': LEGACY_API_TOKEN };
+
+        function setPill(id, text, className) {
+            const node = el(id);
+            if (!node) return;
+            node.textContent = text;
+            node.className = `status-pill ${className}`;
+        }
+
+        function setOps(id, value, state = 'ok') {
+            const card = el(id);
+            const valueNode = el(`${id}Value`);
+            if (!card || !valueNode) return;
+            valueNode.textContent = value;
+            card.className = `ops-item ${state}`;
+        }
+
+        function setApiStatus(state, detail = '') {
+            if (state === 'online') {
+                apiState.online = true;
+                apiState.lastOk = new Date();
+                apiState.optionalFailures = 0;
+                setPill('apiStatus', 'API online', 'online');
+                setOps('opsApi', 'online', 'ok');
+                return;
+            }
+            if (state === 'degraded') {
+                apiState.optionalFailures += 1;
+                setPill('apiStatus', detail || 'API degraded', 'degraded');
+                setOps('opsApi', detail || 'degraded', 'warn');
+                return;
+            }
+            apiState.online = false;
+            setPill('apiStatus', detail || 'API offline', 'critical');
+            setOps('opsApi', detail || 'offline', 'fail');
+        }
+
+        function formatUptime(seconds) {
+            const value = Number(seconds || 0);
+            const days = Math.floor(value / 86400);
+            const hours = Math.floor((value % 86400) / 3600);
+            const minutes = Math.floor((value % 3600) / 60);
+            if (days) return `${days}d ${hours}h`;
+            if (hours) return `${hours}h ${minutes}m`;
+            return `${minutes}m`;
+        }
+
+        function wsStateLabel(text, state) {
+            setPill('wsStatus', text, state);
+            setOps('opsWs', text.replace(/^WS\s+/i, ''), state === 'online' ? 'ok' : state === 'degraded' ? 'warn' : 'fail');
+        }
+
+        async function refreshOperationalStatus(force = false) {
+            const now = Date.now();
+            if (!force && now < opsRefreshAt) return;
+            opsRefreshAt = now + 10000;
+            try {
+                const ready = await fetch(READY_URL, { cache: 'no-store', headers: authHeaders() });
+                const payload = await ready.json().catch(() => ({}));
+                if (ready.status === 401) {
+                    setApiStatus('degraded', 'Login necessário');
+                } else if (ready.ok && payload.ready !== false && payload.status === 'ok') {
+                    setApiStatus('online');
+                } else {
+                    setApiStatus('degraded', 'API degraded');
+                }
+            } catch (error) {
+                setApiStatus('critical', 'API offline');
+            }
+
+            try {
+                const response = await fetch(HOST_METRICS_URL, { cache: 'no-store' });
+                if (response.status === 401) {
+                    setApiStatus('degraded', 'Login necessário');
+                    throw new Error('HTTP 401');
+                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const metrics = await response.json();
+                const available = Number(metrics.memory_mb?.available || 0);
+                const total = Number(metrics.memory_mb?.total || 0);
+                const usedPercent = total ? Math.round((1 - available / total) * 100) : 0;
+                const diskRaw = String(metrics.disk_root?.used_percent || '0%');
+                const diskPercent = Number.parseInt(diskRaw, 10) || 0;
+                setOps('opsMemory', `${available}MB livre (${usedPercent}% usado)`, usedPercent > 85 ? 'fail' : usedPercent > 70 ? 'warn' : 'ok');
+                setOps('opsDisk', `${diskRaw} usado`, diskPercent > 85 ? 'fail' : diskPercent > 70 ? 'warn' : 'ok');
+                setOps('opsUptime', `${formatUptime(metrics.uptime_seconds)} | load ${metrics.load_avg || 'N/D'}`, 'ok');
+            } catch (error) {
+                setOps('opsMemory', 'métrica indisponível', 'warn');
+                setOps('opsDisk', 'métrica indisponível', 'warn');
+                setOps('opsUptime', 'métrica indisponível', 'warn');
+            }
+        }
+
+        function renderEmptyState(title, detail) {
+            return `<div class="empty-state"><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
+        }
+
+        function renderPlaceholderRows(rows = demoSignals) {
+            return rows.map(item => `
+                <div class="placeholder-row">
+                    <span>${esc(item.label)}</span>
+                    <strong style="color:${item.tone || 'var(--cyan)'}">${esc(item.value)}</strong>
+                </div>
+            `).join('');
+        }
+
+        async function apiRequest(path, method = 'GET', body = null) {
+            try {
+                const response = await fetch(`${API_ORIGIN}${path}`, {
+                    method,
+                    cache: 'no-store',
+                    headers: {
+                        ...authHeaders(),
+                        ...(body ? { 'Content-Type': 'application/json' } : {})
+                    },
+                    body: body ? JSON.stringify(body) : null
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            } catch (error) {
+                if (apiState.online) setApiStatus('degraded', 'API degraded');
+                return null;
+            }
+        }
 
         function getSeverity(riskValue) {
             if (riskValue >= 90) return 'critical';
@@ -1142,7 +1390,7 @@
             const originHtml = origins.map(origin => {
                 const alert = latestByOrigin.get(origin.city) || {};
                 const cls = severity(alert) === 'critical' ? 'critical' : '';
-                const tip = `${origin.country} / ${origin.city}\nIP: ${alert.ip || origin.ip}\nRisco: ${risk(alert)}\nStatus: ${alert.status || 'Aguardando'}\nFonte TI: ${alert.threat_source || 'N/D'}`;
+                const tip = `${origin.country} / ${origin.city}\nIP: ${alert.ip || origin.ip}\nRisco: ${risk(alert)}\nStatus: ${alert.status || 'Sem alerta ativo'}\nFonte TI: ${alert.threat_source || 'N/D'}`;
                 return `<div class="map-point ${cls}" style="--x:${origin.x}%;--y:${origin.y}%;" data-tip="${esc(tip)}"><span class="country-label">${esc(origin.country)}</span></div>`;
             }).join('');
 
@@ -1337,21 +1585,41 @@
             });
 
             const ipRows = Object.entries(byIp);
+            if (!ipRows.length) {
+                el('avgRiskList').innerHTML = renderPlaceholderRows([
+                    { label: '10.0.1.237', value: 'baseline 12', tone: 'var(--green)' },
+                    { label: '203.0.113.10', value: 'observado 0', tone: 'var(--cyan)' },
+                    { label: '198.51.100.88', value: 'sem IOC', tone: 'var(--muted)' }
+                ]);
+                el('rankFreq').innerHTML = renderPlaceholderRows([
+                    { label: 'janela atual', value: 'sem pico', tone: 'var(--green)' },
+                    { label: 'eventos demo', value: 'prontos', tone: 'var(--cyan)' }
+                ]);
+                el('topPortsList').innerHTML = renderPlaceholderRows([
+                    { label: 'porta 80', value: 'pública', tone: 'var(--green)' },
+                    { label: 'porta 443', value: 'TLS', tone: 'var(--cyan)' },
+                    { label: '5000/5432/6379', value: 'fechadas', tone: 'var(--yellow)' }
+                ]);
+            }
             el('avgRiskList').innerHTML = ipRows
                 .map(([ip, data]) => [ip, Math.round(data.riskSum / data.count)])
                 .sort((a, b) => b[1] - a[1]).slice(0, 6)
-                .map(([ip, avg]) => `<div class="rank-item"><span>${esc(ip)}</span><strong>${avg}</strong></div>`).join('') || '<div class="muted">Sem dados</div>';
+                .map(([ip, avg]) => `<div class="rank-item"><span>${esc(ip)}</span><strong>${avg}</strong></div>`).join('') || el('avgRiskList').innerHTML;
 
             el('rankFreq').innerHTML = ipRows
                 .sort((a, b) => b[1].count - a[1].count).slice(0, 6)
-                .map(([ip, data]) => `<div class="rank-item"><span>${esc(ip)}</span><strong>${data.count}</strong></div>`).join('') || '<div class="muted">Sem dados</div>';
+                .map(([ip, data]) => `<div class="rank-item"><span>${esc(ip)}</span><strong>${data.count}</strong></div>`).join('') || el('rankFreq').innerHTML;
 
             el('topPortsList').innerHTML = Object.entries(byPort)
                 .sort((a, b) => b[1] - a[1]).slice(0, 6)
-                .map(([port, count]) => `<div class="rank-item"><span>porta ${esc(port)}</span><strong>${count}</strong></div>`).join('') || '<div class="muted">Sem dados</div>';
+                .map(([port, count]) => `<div class="rank-item"><span>porta ${esc(port)}</span><strong>${count}</strong></div>`).join('') || el('topPortsList').innerHTML;
 
             const labels = Object.keys(byType).slice(0, 8);
             const values = labels.map(label => byType[label]);
+            if (!labels.length) {
+                labels.push('baseline', 'demo-ready', 'sem-alerta');
+                values.push(1, 1, 1);
+            }
             if (!typeChart) {
                 typeChart = new Chart(el('typeChart'), {
                     type: 'doughnut',
@@ -1413,14 +1681,18 @@
                         </span>
                         <strong>${esc(incident.max_score)}</strong>
                     </div>
-                `).join('') || '<div class="muted">Nenhum incidente encontrado. Execute um replay para gerar eventos simulados.</div>';
+                `).join('') || renderEmptyState('Nenhum incidente ativo', 'Fila limpa no período selecionado. Replays e eventos reais aparecerão aqui.');
             } catch (error) {
-                el('incidentsStatus').textContent = 'API INDISPONÍVEL';
+                el('incidentsStatus').textContent = apiState.online ? 'DEGRADED' : 'CHECANDO API';
+                el('incidentsList').innerHTML = renderPlaceholderRows([
+                    { label: 'incidentes', value: 'aguardando API', tone: 'var(--yellow)' },
+                    { label: 'último estado local', value: apiState.online ? 'API parcial' : 'sem resposta', tone: apiState.online ? 'var(--cyan)' : 'var(--orange)' }
+                ]);
             }
         }
 
         async function openIncidentDetail(incidentId) {
-            el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Incidente</div><div>Carregando...</div></div>';
+            el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Incidente</div><div><span class="skeleton-line"></span></div></div>';
             el('drawerBackdrop').classList.add('open');
             el('detailDrawer').classList.add('open');
             try {
@@ -1555,7 +1827,17 @@
 
         function renderFeed(alerts) {
             if (!alerts.length) {
-                el('feedBody').innerHTML = '<tr><td colspan="8">Nenhum alerta no período selecionado.</td></tr>';
+                el('feedBody').innerHTML = `
+                    <tr>
+                        <td class="mono" style="border-left:4px solid var(--green); color:var(--green)">standby</td>
+                        <td class="mono">SOC local<br><span class="muted">-> sentinela-web:443<br>tenant default</span></td>
+                        <td><span class="tag low">LOW</span><br><span class="muted">baseline</span></td>
+                        <td class="mono" style="color:var(--green)">0</td>
+                        <td class="mono"><div class="tag low">Sem incidente ativo</div><div class="muted">janela limpa</div></td>
+                        <td class="mono">MITRE: N/D<br><span class="muted">Regras prontas para replay</span></td>
+                        <td>${renderEmptyState('Sem alertas no período', 'Telemetria online; execute um replay para popular o feed.')}</td>
+                        <td><span class="action monitorado">MONITORADO</span><br><span class="muted">simulation / not_executed</span></td>
+                    </tr>`;
                 return;
             }
             const historyMode = dashboardMode === 'historico';
@@ -1774,11 +2056,39 @@
             }
         }
 
+        function refreshHeatmap() {
+            const container = el('mitre-heatmap');
+            const techniques = visibleAlerts.flatMap(alert => alert.mitre_id ? [alert.mitre_id] : []);
+            const values = techniques.length ? [...new Set(techniques)].slice(0, 8) : fallbackMitre;
+            container.innerHTML = values.map((item, index) => `
+                <span class="tag ${techniques.length ? 'medium' : 'low'}" title="${techniques.length ? 'observado' : 'baseline'}">${esc(item)}</span>
+            `).join('');
+        }
+
+        function refreshPendingActions() {
+            const container = el('pending-actions');
+            const actions = visibleAlerts
+                .filter(alert => risk(alert) >= 70 || alert.simulated_block)
+                .slice(0, 4)
+                .map(alert => [alert.response_playbook || 'PB-SOC-001', alert.execution_status || 'pendente simulado']);
+            const rows = actions.length ? actions : fallbackActions;
+            container.innerHTML = rows.map(([name, state]) => `
+                <div class="placeholder-row">
+                    <span>${esc(name)}</span>
+                    <strong style="color:${actions.length ? 'var(--yellow)' : 'var(--cyan)'}">${esc(state)}</strong>
+                </div>
+            `).join('');
+        }
+
         async function refreshBilling() {
             const data = await apiRequest('/saas/billing');
             const container = el('billing-info');
             if (!data || data.length === 0) {
-                container.innerHTML = '<p class="muted">Nenhum registro de uso encontrado.</p>';
+                container.innerHTML = renderPlaceholderRows([
+                    { label: 'tenant default', value: 'free tier', tone: 'var(--green)' },
+                    { label: 'eventos atuais', value: `${visibleAlerts.length} visíveis`, tone: 'var(--cyan)' },
+                    { label: 'custo estimado', value: 'R$ 0,00', tone: 'var(--green)' }
+                ]);
                 return;
             }
             container.innerHTML = data.map(record => `
@@ -1801,12 +2111,17 @@
 
         async function refreshGraphPaths() {
             const data = await apiRequest('/graph/attack-paths');
-            const container = el('graph-paths');
+            const containers = document.querySelectorAll('#graph-paths');
+            const render = html => containers.forEach(container => { container.innerHTML = html; });
             if (!data || data.length === 0) {
-                container.innerHTML = '<p class="muted">Nenhum caminho de ataque complexo detectado até o momento.</p>';
+                render(renderPlaceholderRows([
+                    { label: 'identity -> workload', value: 'sem abuso', tone: 'var(--green)' },
+                    { label: 'internet -> dashboard', value: 'HTTPS', tone: 'var(--cyan)' },
+                    { label: 'lateral movement', value: 'não observado', tone: 'var(--muted)' }
+                ]));
                 return;
             }
-            container.innerHTML = data.map(path => {
+            render(data.map(path => {
                 const chain = path.nodes.map(n => `<span style="color:var(--purple)">${esc(n.address || n.name || n.id)}</span>`).join(' -> ');
                 return `
                     <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; font-size: 0.8rem;">
@@ -1814,14 +2129,18 @@
                         <span class="muted">Relacionamentos: ${path.relationships.join(', ')}</span>
                     </div>
                 `;
-            }).join('');
+            }).join(''));
         }
 
         async function refreshAIScores() {
             const data = visibleAlerts.filter(a => a.ai_anomaly_score > 0.6).slice(0, 5);
             const container = el('ai-scores-list');
             if (data.length === 0) {
-                container.innerHTML = '<p class="muted italic">Sem anomalias críticas no período.</p>';
+                container.innerHTML = renderPlaceholderRows([
+                    { label: 'baseline HTTP', value: 'normal', tone: 'var(--green)' },
+                    { label: 'event burst', value: '0 picos', tone: 'var(--cyan)' },
+                    { label: 'anomaly score', value: '< 60%', tone: 'var(--green)' }
+                ]);
                 return;
             }
             container.innerHTML = data.map(alert => `
@@ -1835,7 +2154,14 @@
         async function refreshSoarStatus() {
             const data = await apiRequest('/soar/playbooks');
             const container = el('soar-status');
-            if (!data) return;
+            if (!data || data.length === 0) {
+                container.innerHTML = renderPlaceholderRows([
+                    { label: 'PB-SOC-001', value: 'governed', tone: 'var(--yellow)' },
+                    { label: 'PB-SOC-004', value: 'manual approval', tone: 'var(--yellow)' },
+                    { label: 'auto-execute', value: 'disabled', tone: 'var(--green)' }
+                ]);
+                return;
+            }
             container.innerHTML = data.map(pb => `
                 <div style="font-size:0.75rem; border-bottom:1px solid rgba(255,255,255,0.05); padding:2px 0;">
                     ${esc(pb.name)}: <span style="color:${pb.auto_execute ? 'var(--green)' : 'var(--yellow)'}">
@@ -1847,11 +2173,13 @@
 
         async function refresh() {
             const selectedRange = el('rangeSelect').value;
+            refreshOperationalStatus();
             try {
                 const demoQuery = dashboardMode === 'demo' ? '&mode=demo' : '';
                 const response = await fetch(`${API_URL}?range=${encodeURIComponent(selectedRange)}${demoQuery}`, { cache: 'no-store', headers: authHeaders() });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const payload = await response.json();
+                setApiStatus('online');
                 const alerts = Array.isArray(payload) ? payload : (payload.data || []);
                 allAlerts = alerts;
                 const newAlerts = alerts.filter(alert => alert.id && !seenIds.has(alert.id)).slice(0, 5);
@@ -1863,14 +2191,19 @@
                 refreshIncidents();
                 refreshHeatmap();
                 refreshPendingActions();
-                refreshBilling();
-                refreshGraphPaths();
                 refreshAIScores();
-                refreshSoarStatus();
+                if (Date.now() > optionalRefreshAt) {
+                    optionalRefreshAt = Date.now() + 15000;
+                    refreshBilling();
+                    refreshGraphPaths();
+                    refreshSoarStatus();
+                }
                 el('rangeLabel').textContent = `Filtro: ${rangeNames[selectedRange] || selectedRange} | Modo: ${dashboardMode.toUpperCase()}`;
                 el('lastUpdate').textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
             } catch (error) {
-                el('lastUpdate').textContent = 'API indisponível';
+                setApiStatus('critical', 'API offline');
+                el('lastUpdate').textContent = `API sem resposta às ${new Date().toLocaleTimeString('pt-BR')}`;
+                if (!allAlerts.length) renderAll([]);
             }
         }
 
@@ -1927,7 +2260,7 @@
         }
 
         async function openIpInvestigation(sourceIp) {
-            el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Investigação</div><div>Carregando...</div></div>';
+            el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Investigação</div><div><span class="skeleton-line"></span></div></div>';
             el('drawerBackdrop').classList.add('open');
             el('detailDrawer').classList.add('open');
             try {
@@ -2003,23 +2336,25 @@
         }
 
         function connectWebSocket() {
-            if (!('WebSocket' in window)) return;
+            if (!('WebSocket' in window)) {
+                wsStateLabel('WS indisponível', 'degraded');
+                return;
+            }
             if (wsClient) wsClient.close();
+            if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+            wsStateLabel('WS conectando', 'degraded');
             const token = session?.token;
             const url = token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL;
             wsClient = new WebSocket(url);
             wsClient.onopen = () => {
-                el('wsStatus').textContent = 'WS online';
-                el('wsStatus').className = 'online';
+                wsStateLabel('WS online', 'online');
             };
             wsClient.onclose = () => {
-                el('wsStatus').textContent = 'WS offline';
-                el('wsStatus').className = 'offline';
-                setTimeout(connectWebSocket, 3500);
+                wsStateLabel(apiState.online ? 'WS reconectando' : 'WS offline', apiState.online ? 'degraded' : 'offline');
+                wsReconnectTimer = setTimeout(connectWebSocket, 3500);
             };
             wsClient.onerror = () => {
-                el('wsStatus').textContent = 'WS erro';
-                el('wsStatus').className = 'offline';
+                wsStateLabel(apiState.online ? 'WS degraded' : 'WS erro', apiState.online ? 'degraded' : 'offline');
             };
             wsClient.onmessage = event => {
                 const payload = JSON.parse(event.data || '{}');
@@ -2087,12 +2422,31 @@
         el('closeDrawer').addEventListener('click', closeDrawer);
         el('drawerBackdrop').addEventListener('click', closeDrawer);
 
+        el('feedBody').innerHTML = `
+            <tr>
+                <td colspan="8">
+                    <div class="empty-state">
+                        <strong>Inicializando console SOC</strong>
+                        <span class="skeleton-line"></span>
+                        <span>API, WebSocket e widgets auxiliares serão atualizados em instantes.</span>
+                    </div>
+                </td>
+            </tr>`;
+        el('incidentsList').innerHTML = renderPlaceholderRows();
+        refreshHeatmap();
+        refreshPendingActions();
+        refreshAIScores();
+        refreshSoarStatus();
+        refreshBilling();
+        refreshGraphPaths();
         renderStaticPoints([]);
         renderSession();
+        refreshOperationalStatus(true);
         connectWebSocket();
         refresh();
         refreshIncidents();
         setInterval(refresh, 2500);
+        setInterval(() => refreshOperationalStatus(true), 15000);
     </script>
 </body>
 </html>

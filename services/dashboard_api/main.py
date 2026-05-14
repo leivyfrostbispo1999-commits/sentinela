@@ -74,6 +74,11 @@ SENTINELA_USER = os.getenv("SENTINELA_USER", "admin")
 SENTINELA_PASSWORD = os.getenv("SENTINELA_PASSWORD", "sentinela")
 DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
 VALID_ROLES = {"admin", "analyst", "viewer"}
+ROLE_PERMISSIONS = {
+    "admin": ["auth:read", "audit:read", "incident:read", "incident:update", "tenant:write", "playbook:approve", "report:export"],
+    "analyst": ["auth:read", "incident:read", "incident:update", "playbook:approve", "report:export"],
+    "viewer": ["auth:read", "incident:read", "report:export"],
+}
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "10"))
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "240"))
 ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
@@ -90,6 +95,16 @@ SENTINELA_VERSION = "SENTINELA 7.0"
 INCIDENT_WINDOW_SECONDS = int(os.getenv("INCIDENT_WINDOW_SECONDS", "600"))
 ALLOWED_INCIDENT_STATUSES = {"NEW", "DETECTED", "TRIAGED", "INVESTIGATING", "CONTAINED", "RESOLVED", "FALSE_POSITIVE", "CLOSED"}
 OPEN_INCIDENT_STATUSES = {"NEW", "DETECTED", "TRIAGED", "INVESTIGATING", "CONTAINED"}
+INCIDENT_STATUS_TRANSITIONS = {
+    "NEW": {"TRIAGED", "INVESTIGATING", "FALSE_POSITIVE", "CLOSED"},
+    "DETECTED": {"TRIAGED", "INVESTIGATING", "FALSE_POSITIVE", "CLOSED"},
+    "TRIAGED": {"INVESTIGATING", "CONTAINED", "FALSE_POSITIVE", "CLOSED"},
+    "INVESTIGATING": {"CONTAINED", "RESOLVED", "FALSE_POSITIVE", "CLOSED"},
+    "CONTAINED": {"RESOLVED", "INVESTIGATING", "CLOSED"},
+    "RESOLVED": {"CLOSED", "INVESTIGATING"},
+    "FALSE_POSITIVE": {"CLOSED", "INVESTIGATING"},
+    "CLOSED": {"INVESTIGATING"},
+}
 MITRE_MAPPINGS = {
     "PORT_SCAN": {"id": "T1046", "name": "Network Service Discovery", "tactic": "Discovery"},
     "SCAN": {"id": "T1046", "name": "Network Service Discovery", "tactic": "Discovery"},
@@ -754,12 +769,25 @@ def verify_jwt(token):
 def authenticate_user(username, password):
     user = USERS.get(username or "")
     if user and verify_password(password, user.get("password_hash")):
+        role = user.get("role", "viewer")
         return {
             "sub": user["username"],
-            "role": user.get("role", "viewer"),
+            "role": role if role in VALID_ROLES else "viewer",
             "tenant_id": user.get("tenant_id") or DEFAULT_TENANT_ID,
         }
     return None
+
+
+def public_identity(identity):
+    identity = identity or {}
+    role = identity.get("role") if identity.get("role") in VALID_ROLES else "viewer"
+    return {
+        "sub": identity.get("sub"),
+        "role": role,
+        "tenant_id": identity.get("tenant_id") or DEFAULT_TENANT_ID,
+        "permissions": ROLE_PERMISSIONS.get(role, ROLE_PERMISSIONS["viewer"]),
+        "auth_enabled": ENABLE_AUTH,
+    }
 
 
 def current_identity():
@@ -805,6 +833,14 @@ def require_auth(view=None, roles=None):
             if not identity:
                 return jsonify({"error": "unauthorized"}), 401
             if identity.get("role") not in allowed_roles:
+                write_audit(
+                    action="authorization_denied",
+                    resource_type="endpoint",
+                    resource_id=request.path,
+                    success=False,
+                    identity=identity,
+                    metadata={"required_roles": sorted(allowed_roles), "method": request.method},
+                )
                 return jsonify({"error": "forbidden", "required_roles": sorted(allowed_roles)}), 403
             request.sentinela_identity = identity
             return fn(*args, **kwargs)
@@ -1637,6 +1673,16 @@ def lifecycle_from_status(status):
         "FALSE_POSITIVE": "Closed",
     }
     return mapping.get(normalized, "Detected")
+
+
+def incident_transition_allowed(current_status, next_status):
+    current = str(current_status or "NEW").strip().upper()
+    target = str(next_status or "").strip().upper()
+    if not target or current == target:
+        return True
+    if current not in ALLOWED_INCIDENT_STATUSES or target not in ALLOWED_INCIDENT_STATUSES:
+        return False
+    return target in INCIDENT_STATUS_TRANSITIONS.get(current, set())
 
 
 def fetch_incident_by_id(conn, incident_id):
@@ -2865,7 +2911,7 @@ def auth_token():
         "token_type": "Bearer",
         "expires_in": access_ttl,
         "refresh_expires_in": refresh_ttl,
-        "user": identity,
+        "user": public_identity(identity),
     })
 
 
@@ -2894,8 +2940,16 @@ def auth_refresh():
         "token_type": "Bearer",
         "expires_in": access_ttl,
         "refresh_expires_in": refresh_ttl,
-        "user": identity,
+        "user": public_identity(identity),
     })
+
+
+@app.get("/auth/me")
+@require_auth
+def auth_me():
+    REQUEST_COUNTER.labels(endpoint="auth_me").inc()
+    identity = current_identity()
+    return jsonify({"user": public_identity(identity)})
 
 
 @app.get("/alertas")
@@ -3200,6 +3254,26 @@ def update_incident(incident_id):
                     break
         if not existing:
             return jsonify({"error": "not_found", "incident_id": incident_id}), 404
+        if "status" in updates and not incident_transition_allowed(existing.get("status"), updates["status"]):
+            allowed_next = INCIDENT_STATUS_TRANSITIONS.get(str(existing.get("status") or "NEW").upper(), set())
+            write_audit(
+                action="incident_transition_denied",
+                resource_type="incident",
+                resource_id=incident_id,
+                success=False,
+                metadata={"from": existing.get("status"), "to": updates["status"]},
+            )
+            return jsonify({
+                "error": "invalid_status_transition",
+                "from": existing.get("status"),
+                "to": updates["status"],
+                "allowed_next_statuses": sorted(allowed_next),
+            }), 409
+        audit_changes = {
+            field: {"from": existing.get(field), "to": updates[field]}
+            for field in updates
+            if str(existing.get(field) or "") != str(updates[field] or "")
+        }
         with conn.cursor() as cur:
             for field, new_value in updates.items():
                 old_value = existing.get(field)
@@ -3253,7 +3327,11 @@ def update_incident(incident_id):
             resource_type="incident",
             resource_id=incident_id,
             success=True,
-            metadata={"fields": sorted(updates.keys())},
+            metadata={
+                "fields": sorted(updates.keys()),
+                "changes": audit_changes,
+                "lifecycle_stage": lifecycle_from_status(updates.get("status", existing.get("status"))),
+            },
         )
         return jsonify(refreshed), 200
     finally:

@@ -156,6 +156,22 @@ def test_login_returns_role_and_tenant_claims(monkeypatch):
     assert payload["refresh_token"]
 
 
+def test_auth_me_returns_role_tenant_and_permissions(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    token = api.create_jwt(subject="analyst", role="analyst", tenant_id="tenant-a")
+    client = api.app.test_client()
+
+    response = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["user"]["role"] == "analyst"
+    assert payload["user"]["tenant_id"] == "tenant-a"
+    assert payload["user"]["auth_enabled"] is True
+    assert "incident:update" in payload["user"]["permissions"]
+
+
 def test_viewer_cannot_update_incident(monkeypatch):
     monkeypatch.setenv("ENABLE_AUTH", "true")
     api = load_api(monkeypatch)
@@ -507,6 +523,18 @@ def test_incident_status_update_endpoint_accepts_safe_fields(monkeypatch):
     assert response.status_code == 200
     assert any("INSERT INTO incidents" in statement for statement, _ in fake_conn.cursor_obj.statements)
     assert any("incident_audit_log" in statement for statement, _ in fake_conn.cursor_obj.statements)
+
+
+def test_incident_lifecycle_transition_policy(monkeypatch):
+    api = load_api(monkeypatch)
+
+    assert api.incident_transition_allowed("NEW", "TRIAGED")
+    assert api.incident_transition_allowed("TRIAGED", "INVESTIGATING")
+    assert api.incident_transition_allowed("INVESTIGATING", "CONTAINED")
+    assert api.incident_transition_allowed("CONTAINED", "RESOLVED")
+    assert api.incident_transition_allowed("CLOSED", "INVESTIGATING")
+    assert not api.incident_transition_allowed("CLOSED", "RESOLVED")
+    assert not api.incident_transition_allowed("FALSE_POSITIVE", "CONTAINED")
 
 
 def test_investigation_includes_analyst_summary_and_recommendations(monkeypatch):

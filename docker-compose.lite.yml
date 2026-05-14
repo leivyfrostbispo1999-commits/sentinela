@@ -11,7 +11,7 @@ services:
     mem_limit: 128m
     cpus: "0.25"
     networks:
-      - sentinela-lite-net
+      - sentinela-micro-net
 
   redis:
     image: redis:7-alpine
@@ -20,7 +20,7 @@ services:
     command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
     mem_limit: 128m
     networks:
-      - sentinela-lite-net
+      - sentinela-micro-net
 
   # Dashboard API - O coração do monitoramento
   dashboard_api:
@@ -28,17 +28,18 @@ services:
       context: ./services/dashboard_api
     container_name: sentinela-api-lite
     restart: always
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
     environment:
       DB_HOST: db
       SENTINELA_ENV: production
-      ENABLE_AUTH: "false" # Facilitar teste inicial
+      SENTINELA_JWT_SECRET: ${SENTINELA_JWT_SECRET:?SENTINELA_JWT_SECRET required}
+      ENABLE_AUTH: "true"
     depends_on:
       - db
     mem_limit: 200m
     networks:
-      - sentinela-lite-net
+      - sentinela-micro-net
 
   # Dashboard Web - A cara do SENTINELA
   dashboard_web:
@@ -52,7 +53,7 @@ services:
       - dashboard_api
     mem_limit: 64m
     networks:
-      - sentinela-lite-net
+      - sentinela-micro-net
 
   # AI Engine Lite - Análise comportamental via DB
   ai_engine_lite:
@@ -68,8 +69,8 @@ services:
       - db
     mem_limit: 256m
     networks:
-      - sentinela-lite-net
+      - sentinela-micro-net
 
 networks:
-  sentinela-lite-net:
+  sentinela-micro-net:
     driver: bridge
