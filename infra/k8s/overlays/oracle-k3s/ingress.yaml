@@ -12,10 +12,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - sentinela.example.com
+        - levi-sentinela.duckdns.org
       secretName: sentinela-tls
   rules:
-    - host: sentinela.example.com
+    - host: levi-sentinela.duckdns.org
       http:
         paths:
           - path: /

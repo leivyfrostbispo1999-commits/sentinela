@@ -2,6 +2,10 @@
 
 O SENTINELA é uma plataforma avançada de detecção e resposta (XDR) potencializada por Inteligência Artificial, Grafos de Ameaça e Copilot SOC.
 
+## Acesso público
+
+Ambiente Oracle atual: https://levi-sentinela.duckdns.org/
+
 ## 🚀 Capacidades Enterprise
 
 - **AI-native XDR**: Ingestão e correlação de telemetria de Endpoint, Rede, Cloud e Identidade.
