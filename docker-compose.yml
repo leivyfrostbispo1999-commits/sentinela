@@ -63,22 +63,6 @@ services:
     mem_limit: 512m
     cpus: "0.50"
 
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: sentinela-jaeger
-    profiles: ["core", "full"]
-    restart: unless-stopped
-    ports:
-      - "16686:16686"
-      - "4317:4317"
-      - "4318:4318"
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-    networks:
-      - sentinela-net
-    mem_limit: 256m
-    cpus: "0.25"
-
   redis:
     image: redis:7-alpine
     container_name: sentinela-redis

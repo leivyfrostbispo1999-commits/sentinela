@@ -1,4 +1,4 @@
-name: sentinela-7-ci
+name: sentinela-ci
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest bandit
+          python -m pip install pytest bandit pyyaml
           for f in services/*/requirements.txt; do python -m pip install -r "$f"; done
 
       - name: Security Scan (Bandit)
@@ -46,6 +46,35 @@ jobs:
           docker compose config
           docker compose --profile search config
           docker compose --profile production config
+
+      - name: Validate Kubernetes YAML parse
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          for path in Path("infra/k8s").rglob("*.yaml"):
+              docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+              assert any(doc for doc in docs), f"{path} has no YAML documents"
+          PY
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+
+      - name: Validate Kubernetes kustomize overlays
+        run: |
+          kubectl kustomize infra/k8s/base >/tmp/sentinela-base.yaml
+          kubectl kustomize infra/k8s/overlays/dev >/tmp/sentinela-dev.yaml
+          kubectl kustomize infra/k8s/overlays/prod >/tmp/sentinela-prod.yaml
+          kubectl kustomize infra/k8s/overlays/oracle-k3s >/tmp/sentinela-oracle-k3s.yaml
+          kubectl kustomize infra/k8s/overlays/mtls-linkerd >/tmp/sentinela-mtls.yaml
+          test -s /tmp/sentinela-base.yaml
+          test -s /tmp/sentinela-dev.yaml
+          test -s /tmp/sentinela-prod.yaml
+          test -s /tmp/sentinela-oracle-k3s.yaml
+          test -s /tmp/sentinela-mtls.yaml
 
       - name: Validate frontend artifact
         run: test -f services/dashboard_web/index.html

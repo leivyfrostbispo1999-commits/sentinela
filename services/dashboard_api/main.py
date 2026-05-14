@@ -73,10 +73,12 @@ OPENSEARCH_INDEX_ALERTS = os.getenv("OPENSEARCH_INDEX_ALERTS", "sentinela-alerts
 SENTINELA_USER = os.getenv("SENTINELA_USER", "admin")
 SENTINELA_PASSWORD = os.getenv("SENTINELA_PASSWORD", "sentinela")
 DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
-VALID_ROLES = {"admin", "analyst", "viewer"}
+VALID_ROLES = {"super_admin", "admin", "analyst", "viewer", "auditor"}
 ROLE_PERMISSIONS = {
-    "admin": ["auth:read", "audit:read", "incident:read", "incident:update", "tenant:write", "playbook:approve", "report:export"],
-    "analyst": ["auth:read", "incident:read", "incident:update", "playbook:approve", "report:export"],
+    "super_admin": ["auth:read", "audit:read", "incident:read", "incident:update", "tenant:write", "user:manage", "playbook:approve", "report:export", "alert:update"],
+    "admin": ["auth:read", "audit:read", "incident:read", "incident:update", "tenant:write", "user:manage", "playbook:approve", "report:export", "alert:update"],
+    "analyst": ["auth:read", "incident:read", "incident:update", "playbook:approve", "report:export", "alert:update"],
+    "auditor": ["auth:read", "audit:read", "incident:read", "report:export"],
     "viewer": ["auth:read", "incident:read", "report:export"],
 }
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "10"))
@@ -94,6 +96,7 @@ RULES_CANDIDATES = [
 SENTINELA_VERSION = "SENTINELA 7.0"
 INCIDENT_WINDOW_SECONDS = int(os.getenv("INCIDENT_WINDOW_SECONDS", "600"))
 ALLOWED_INCIDENT_STATUSES = {"NEW", "DETECTED", "TRIAGED", "INVESTIGATING", "CONTAINED", "RESOLVED", "FALSE_POSITIVE", "CLOSED"}
+ALLOWED_ALERT_LIFECYCLE_STATUSES = {"NEW", "ACKNOWLEDGED", "TRIAGED", "INVESTIGATING", "CONTAINED", "RESOLVED", "FALSE_POSITIVE", "CLOSED"}
 OPEN_INCIDENT_STATUSES = {"NEW", "DETECTED", "TRIAGED", "INVESTIGATING", "CONTAINED"}
 INCIDENT_STATUS_TRANSITIONS = {
     "NEW": {"TRIAGED", "INVESTIGATING", "FALSE_POSITIVE", "CLOSED"},
@@ -221,6 +224,14 @@ def verify_password(password, stored):
         except Exception:
             return False
     return hmac.compare_digest(str(password or ""), str(stored))
+
+
+def token_digest(token):
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def utc_from_epoch(epoch_seconds):
+    return datetime.fromtimestamp(int(epoch_seconds), tz=timezone.utc)
 
 
 def load_users():
@@ -488,6 +499,13 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS campaign_id TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS lifecycle_status TEXT DEFAULT 'NEW'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS alert_owner TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS alert_notes TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS false_positive BOOLEAN DEFAULT FALSE")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_campaign_id ON alertas (campaign_id)")
         
         # --- Tabelas SaaS Multi-tenant ---
@@ -547,6 +565,82 @@ def ensure_schema(conn):
             ON CONFLICT (tenant_id) DO NOTHING
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                email TEXT,
+                full_name TEXT,
+                is_active BOOLEAN DEFAULT TRUE,
+                last_login_at TIMESTAMPTZ,
+                created_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer'")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by TEXT")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_users_tenant_username ON users (tenant_id, username)")
+        for username, user in USERS.items():
+            cur.execute(
+                """
+                INSERT INTO users (username, password_hash, role, tenant_id, is_active, created_by)
+                VALUES (%s, %s, %s, %s, TRUE, 'bootstrap')
+                ON CONFLICT (username) DO NOTHING
+                """,
+                (
+                    username,
+                    user.get("password_hash"),
+                    user.get("role") if user.get("role") in VALID_ROLES else "viewer",
+                    user.get("tenant_id") or DEFAULT_TENANT_ID,
+                ),
+            )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                session_id UUID PRIMARY KEY,
+                username TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                source_ip TEXT,
+                user_agent TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked_at TIMESTAMPTZ
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (tenant_id, username, created_at DESC)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                jti UUID PRIMARY KEY,
+                session_id UUID REFERENCES auth_sessions(session_id) ON DELETE CASCADE,
+                username TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked_at TIMESTAMPTZ,
+                replaced_by UUID
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_refresh_tokens_session ON refresh_tokens (session_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens (tenant_id, username, created_at DESC)")
 
         cur.execute(
             """
@@ -674,6 +768,7 @@ def ensure_schema(conn):
             CREATE TABLE IF NOT EXISTS incident_audit_log (
                 id SERIAL PRIMARY KEY,
                 incident_id TEXT NOT NULL,
+                tenant_id TEXT DEFAULT 'default',
                 field_changed TEXT NOT NULL,
                 old_value TEXT,
                 new_value TEXT,
@@ -691,6 +786,8 @@ def ensure_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_alerts_incident_id ON incident_alerts (incident_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_alerts_alert_id ON incident_alerts (alert_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_audit_incident_id ON incident_audit_log (incident_id)")
+        cur.execute("ALTER TABLE incident_audit_log ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
+        cur.execute("UPDATE incident_audit_log SET tenant_id = %s WHERE tenant_id IS NULL", (DEFAULT_TENANT_ID,))
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_idempotency_key ON incidents (idempotency_key) WHERE idempotency_key IS NOT NULL")
         cur.execute(
             """
@@ -705,11 +802,19 @@ def ensure_schema(conn):
                 resource_id TEXT,
                 correlation_id TEXT,
                 source_ip TEXT,
+                request_method TEXT,
+                request_path TEXT,
+                user_agent TEXT,
+                session_id TEXT,
                 success BOOLEAN DEFAULT TRUE,
                 metadata_json JSONB DEFAULT '{}'::jsonb
             )
             """
         )
+        cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS request_method TEXT")
+        cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS request_path TEXT")
+        cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent TEXT")
+        cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS session_id TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_ts ON audit_logs (tenant_id, timestamp DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs (resource_type)")
@@ -762,11 +867,67 @@ def decode_jwt(token):
         return None
 
 
+def token_jti(token):
+    payload = decode_jwt(token)
+    return payload.get("jti") if payload else None
+
+
 def verify_jwt(token):
     return decode_jwt(token) is not None
 
 
+def db_user_to_identity(user):
+    if not user:
+        return None
+    role = user.get("role", "viewer")
+    return {
+        "sub": user["username"],
+        "role": role if role in VALID_ROLES else "viewer",
+        "tenant_id": user.get("tenant_id") or DEFAULT_TENANT_ID,
+    }
+
+
+def fetch_user_record(conn, username):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT username, password_hash, role, tenant_id, email, full_name, is_active,
+                   last_login_at, created_at, updated_at
+            FROM users
+            WHERE username = %s
+            """,
+            (username,),
+        )
+        row = cur.fetchone()
+        columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+    return row_to_dict(row, columns) if row else None
+
+
+def authenticate_user_db(username, password):
+    conn = None
+    try:
+        conn = ensure_connection()
+        user = fetch_user_record(conn, username or "")
+        if user and user.get("is_active") and verify_password(password, user.get("password_hash")):
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE username = %s", (username,))
+            conn.commit()
+            return db_user_to_identity(user)
+    except Exception as exc:
+        log_json("WARN", "Falha na autenticacao por banco; usando fallback local", error=str(exc), username=username)
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return None
+
+
 def authenticate_user(username, password):
+    identity = authenticate_user_db(username, password)
+    if identity:
+        return identity
     user = USERS.get(username or "")
     if user and verify_password(password, user.get("password_hash")):
         role = user.get("role", "viewer")
@@ -790,6 +951,153 @@ def public_identity(identity):
     }
 
 
+def create_persisted_session(identity, refresh_token, refresh_payload):
+    conn = None
+    session_id = str(uuid.uuid4())
+    try:
+        conn = ensure_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO auth_sessions (
+                    session_id, username, tenant_id, role, source_ip, user_agent, expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    session_id,
+                    identity.get("sub"),
+                    identity.get("tenant_id") or DEFAULT_TENANT_ID,
+                    identity.get("role") or "viewer",
+                    request_source_ip(),
+                    request.headers.get("User-Agent") if has_request_context() else None,
+                    utc_from_epoch(refresh_payload["exp"]),
+                ),
+            )
+            cur.execute(
+                """
+                INSERT INTO refresh_tokens (
+                    jti, session_id, username, tenant_id, token_hash, expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    refresh_payload["jti"],
+                    session_id,
+                    identity.get("sub"),
+                    identity.get("tenant_id") or DEFAULT_TENANT_ID,
+                    token_digest(refresh_token),
+                    utc_from_epoch(refresh_payload["exp"]),
+                ),
+            )
+        conn.commit()
+    except Exception as exc:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_json("WARN", "Falha ao persistir sessao; token JWT segue valido", error=str(exc), username=identity.get("sub"))
+        return None
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return session_id
+
+
+def validate_refresh_token_record(raw_token, decoded):
+    conn = None
+    try:
+        conn = ensure_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT rt.jti, rt.session_id, rt.username, rt.tenant_id, rt.token_hash,
+                       rt.expires_at, rt.revoked_at, s.revoked_at AS session_revoked_at,
+                       u.role, u.is_active
+                FROM refresh_tokens rt
+                JOIN auth_sessions s ON s.session_id = rt.session_id
+                LEFT JOIN users u ON u.username = rt.username
+                WHERE rt.jti = %s
+                """,
+                (decoded.get("jti"),),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        record = row_to_dict(row, columns) if row else None
+        if not record:
+            return None, None
+        if record.get("revoked_at") or record.get("session_revoked_at") or record.get("is_active") is False:
+            return None, None
+        if not hmac.compare_digest(record.get("token_hash") or "", token_digest(raw_token)):
+            return None, None
+        identity = {
+            "sub": record.get("username") or decoded.get("sub"),
+            "role": record.get("role") or decoded.get("role", "viewer"),
+            "tenant_id": record.get("tenant_id") or decoded.get("tenant_id") or DEFAULT_TENANT_ID,
+            "session_id": str(record.get("session_id")),
+        }
+        return record, identity
+    except Exception as exc:
+        log_json("WARN", "Falha ao validar refresh token persistido; usando validacao JWT", error=str(exc))
+        return "fallback", {"sub": decoded.get("sub"), "role": decoded.get("role", "viewer"), "tenant_id": decoded.get("tenant_id") or DEFAULT_TENANT_ID}
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def rotate_refresh_token_record(old_record, new_refresh_token, new_refresh_payload):
+    if not old_record or old_record == "fallback":
+        return None
+    conn = None
+    try:
+        conn = ensure_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE refresh_tokens SET revoked_at = NOW(), replaced_by = %s WHERE jti = %s AND revoked_at IS NULL",
+                (new_refresh_payload["jti"], old_record["jti"]),
+            )
+            cur.execute(
+                """
+                INSERT INTO refresh_tokens (
+                    jti, session_id, username, tenant_id, token_hash, expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    new_refresh_payload["jti"],
+                    old_record["session_id"],
+                    old_record["username"],
+                    old_record["tenant_id"],
+                    token_digest(new_refresh_token),
+                    utc_from_epoch(new_refresh_payload["exp"]),
+                ),
+            )
+            cur.execute("UPDATE auth_sessions SET last_seen_at = NOW(), expires_at = %s WHERE session_id = %s", (utc_from_epoch(new_refresh_payload["exp"]), old_record["session_id"]))
+        conn.commit()
+        return str(old_record["session_id"])
+    except Exception as exc:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_json("WARN", "Falha ao rotacionar refresh token persistido", error=str(exc), username=old_record.get("username"))
+        return None
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def current_identity():
     if not has_request_context():
         return {"sub": "system", "role": "admin", "tenant_id": DEFAULT_TENANT_ID}
@@ -800,7 +1108,7 @@ def current_identity():
         raw_token = bearer.split(" ", 1)[1].strip()
         payload = decode_jwt(raw_token)
         if payload and payload.get("token_use") == "access":
-            return {"sub": payload.get("sub"), "role": payload.get("role", "viewer"), "tenant_id": payload.get("tenant_id") or DEFAULT_TENANT_ID}
+            return {"sub": payload.get("sub"), "role": payload.get("role", "viewer"), "tenant_id": payload.get("tenant_id") or DEFAULT_TENANT_ID, "jti": payload.get("jti")}
         if hmac.compare_digest(raw_token, API_TOKEN):
             return {"sub": "legacy-token", "role": "admin", "tenant_id": request.headers.get("X-Tenant-ID") or DEFAULT_TENANT_ID}
     basic = request.authorization
@@ -883,9 +1191,10 @@ def write_audit(action, resource_type=None, resource_id=None, success=True, meta
                 """
                 INSERT INTO audit_logs (
                     tenant_id, actor_user, actor_role, action, resource_type, resource_id,
-                    correlation_id, source_ip, success, metadata_json
+                    correlation_id, source_ip, request_method, request_path, user_agent, session_id,
+                    success, metadata_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 """,
                 (
                     tenant or identity.get("tenant_id") or DEFAULT_TENANT_ID,
@@ -896,6 +1205,10 @@ def write_audit(action, resource_type=None, resource_id=None, success=True, meta
                     resource_id,
                     correlation_id,
                     request_source_ip(),
+                    request.method if has_request_context() else None,
+                    request.path if has_request_context() else None,
+                    request.headers.get("User-Agent") if has_request_context() else None,
+                    identity.get("session_id") or identity.get("jti"),
                     bool(success),
                     json.dumps(metadata, ensure_ascii=False),
                 ),
@@ -1946,13 +2259,13 @@ def fetch_incident_audit(conn, incident_id):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, incident_id, field_changed, old_value, new_value, changed_by, changed_at
+            SELECT id, incident_id, tenant_id, field_changed, old_value, new_value, changed_by, changed_at
             FROM incident_audit_log
-            WHERE incident_id = %s
+            WHERE tenant_id = %s AND incident_id = %s
             ORDER BY changed_at DESC
             LIMIT 100
             """,
-            (incident_id,),
+            (tenant_id(), incident_id),
         )
         rows = cur.fetchall() or []
         columns = [desc[0] for desc in getattr(cur, "description", None) or []]
@@ -2656,10 +2969,143 @@ def health():
 @app.get("/auth/users")
 @require_role("admin")
 def list_users():
-    return jsonify({"count": len(USERS), "data": [
-        {"username": u["username"], "role": u["role"], "tenant_id": u["tenant_id"]}
-        for u in USERS.values()
-    ]})
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT username, role, tenant_id, email, full_name, is_active,
+                       last_login_at, created_at, updated_at
+                FROM users
+                WHERE tenant_id = %s
+                ORDER BY username
+                """,
+                (tenant_id(),),
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        return jsonify({"count": len(rows), "data": [row_to_dict(row, columns) for row in rows]})
+    finally:
+        conn.close()
+
+
+@app.post("/auth/users")
+@require_role("admin")
+def create_user():
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    role = str(payload.get("role") or "viewer").strip()
+    requested_tenant = str(payload.get("tenant_id") or tenant_id()).strip() or tenant_id()
+    identity = current_identity() or {}
+    if not username or not password:
+        return jsonify({"error": "username_and_password_required"}), 400
+    if role not in VALID_ROLES or role == "super_admin":
+        return jsonify({"error": "invalid_role", "allowed_roles": sorted(VALID_ROLES - {"super_admin"})}), 400
+    if identity.get("role") != "super_admin" and requested_tenant != identity.get("tenant_id"):
+        return jsonify({"error": "tenant_scope_violation"}), 403
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (username, password_hash, role, tenant_id, email, full_name, is_active, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s)
+                RETURNING username, role, tenant_id, email, full_name, is_active, created_at, updated_at
+                """,
+                (
+                    username,
+                    pbkdf2_hash(password),
+                    role,
+                    requested_tenant,
+                    payload.get("email"),
+                    payload.get("full_name"),
+                    identity.get("sub"),
+                ),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        conn.commit()
+        write_audit(action="user_created", resource_type="user", resource_id=username, success=True, metadata={"role": role, "tenant_id": requested_tenant})
+        return jsonify(row_to_dict(row, columns)), 201
+    except Exception as exc:
+        conn.rollback()
+        write_audit(action="user_create_failed", resource_type="user", resource_id=username or "unknown", success=False, metadata={"error": str(exc)})
+        return jsonify({"error": "user_create_failed", "detail": str(exc)}), 409
+    finally:
+        conn.close()
+
+
+@app.patch("/auth/users/<username>")
+@require_role("admin")
+def update_user(username):
+    payload = request.get_json(silent=True) or {}
+    allowed = {"password", "role", "email", "full_name", "is_active"}
+    updates = {key: payload[key] for key in allowed if key in payload}
+    if not updates:
+        return jsonify({"error": "empty_update", "allowed_fields": sorted(allowed)}), 400
+    if "role" in updates and (updates["role"] not in VALID_ROLES or updates["role"] == "super_admin"):
+        return jsonify({"error": "invalid_role", "allowed_roles": sorted(VALID_ROLES - {"super_admin"})}), 400
+    conn = ensure_connection()
+    try:
+        existing = fetch_user_record(conn, username)
+        if not existing or existing.get("tenant_id") != tenant_id():
+            return jsonify({"error": "not_found", "username": username}), 404
+        assignments = []
+        params = []
+        if "password" in updates:
+            assignments.append("password_hash = %s")
+            params.append(pbkdf2_hash(str(updates["password"])))
+        for field in ("role", "email", "full_name", "is_active"):
+            if field in updates:
+                assignments.append(f"{field} = %s")
+                params.append(updates[field])
+        params.extend([username, tenant_id()])
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE users
+                SET {', '.join(assignments)}, updated_at = NOW()
+                WHERE username = %s AND tenant_id = %s
+                RETURNING username, role, tenant_id, email, full_name, is_active, last_login_at, created_at, updated_at
+                """,
+                tuple(params),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        conn.commit()
+        write_audit(action="user_updated", resource_type="user", resource_id=username, success=True, metadata={"fields": sorted(updates.keys())})
+        return jsonify(row_to_dict(row, columns)), 200
+    finally:
+        conn.close()
+
+
+@app.delete("/auth/users/<username>")
+@require_role("admin")
+def deactivate_user(username):
+    if username == (current_identity() or {}).get("sub"):
+        return jsonify({"error": "cannot_deactivate_self"}), 400
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET is_active = FALSE, updated_at = NOW()
+                WHERE username = %s AND tenant_id = %s
+                RETURNING username, role, tenant_id, email, full_name, is_active, last_login_at, created_at, updated_at
+                """,
+                (username, tenant_id()),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        if not row:
+            return jsonify({"error": "not_found", "username": username}), 404
+        conn.commit()
+        write_audit(action="user_deactivated", resource_type="user", resource_id=username, success=True)
+        return jsonify(row_to_dict(row, columns)), 200
+    finally:
+        conn.close()
 
 
 @app.get("/auth/permissions")
@@ -2903,7 +3349,10 @@ def auth_token():
     refresh_ttl = REFRESH_TOKEN_EXPIRE_MINUTES * 60
     access_token = create_jwt(subject=identity["sub"], ttl_seconds=access_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="access")
     refresh_token = create_jwt(subject=identity["sub"], ttl_seconds=refresh_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="refresh")
-    write_audit(action="login_success", resource_type="auth", resource_id=identity["sub"], success=True, identity=identity)
+    refresh_payload = decode_jwt(refresh_token) or {}
+    session_id = create_persisted_session(identity, refresh_token, refresh_payload) if refresh_payload else None
+    audit_identity = {**identity, "session_id": session_id}
+    write_audit(action="login_success", resource_type="auth", resource_id=identity["sub"], success=True, identity=audit_identity)
     return jsonify({
         "token": access_token,
         "access_token": access_token,
@@ -2911,6 +3360,7 @@ def auth_token():
         "token_type": "Bearer",
         "expires_in": access_ttl,
         "refresh_expires_in": refresh_ttl,
+        "session_id": session_id,
         "user": public_identity(identity),
     })
 
@@ -2927,12 +3377,18 @@ def auth_refresh():
     if not decoded or decoded.get("token_use") != "refresh":
         write_audit(action="refresh_failed", resource_type="auth", resource_id=decoded.get("sub") if decoded else "unknown", success=False, metadata={"reason": "invalid_refresh_token"})
         return jsonify({"error": "invalid_refresh_token"}), 401
-    identity = {"sub": decoded.get("sub"), "role": decoded.get("role", "viewer"), "tenant_id": decoded.get("tenant_id") or DEFAULT_TENANT_ID}
+    old_record, identity = validate_refresh_token_record(raw_token, decoded)
+    if not identity:
+        write_audit(action="refresh_failed", resource_type="auth", resource_id=decoded.get("sub") or "unknown", success=False, metadata={"reason": "revoked_or_unknown_refresh_token"})
+        return jsonify({"error": "invalid_refresh_token"}), 401
     access_ttl = ACCESS_TOKEN_EXPIRE_MINUTES * 60
     refresh_ttl = REFRESH_TOKEN_EXPIRE_MINUTES * 60
     access_token = create_jwt(subject=identity["sub"], ttl_seconds=access_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="access")
     refresh_token = create_jwt(subject=identity["sub"], ttl_seconds=refresh_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="refresh")
-    write_audit(action="refresh_token", resource_type="auth", resource_id=identity["sub"], success=True, identity=identity)
+    new_refresh_payload = decode_jwt(refresh_token) or {}
+    session_id = rotate_refresh_token_record(old_record, refresh_token, new_refresh_payload) if new_refresh_payload else identity.get("session_id")
+    audit_identity = {**identity, "session_id": session_id or identity.get("session_id")}
+    write_audit(action="refresh_token", resource_type="auth", resource_id=identity["sub"], success=True, identity=audit_identity)
     return jsonify({
         "token": access_token,
         "access_token": access_token,
@@ -2940,6 +3396,7 @@ def auth_refresh():
         "token_type": "Bearer",
         "expires_in": access_ttl,
         "refresh_expires_in": refresh_ttl,
+        "session_id": session_id or identity.get("session_id"),
         "user": public_identity(identity),
     })
 
@@ -2969,6 +3426,93 @@ def alertas():
 def alerts_contract():
     REQUEST_COUNTER.labels(endpoint="alerts").inc()
     return alertas()
+
+
+@app.patch("/alerts/<alert_id>/lifecycle")
+@require_role("admin", "analyst")
+def update_alert_lifecycle(alert_id):
+    REQUEST_COUNTER.labels(endpoint="alert_lifecycle_update").inc()
+    payload = request.get_json(silent=True) or {}
+    status = str(payload.get("status") or payload.get("lifecycle_status") or "").strip().upper()
+    if not status:
+        return jsonify({"error": "status_required", "allowed_statuses": sorted(ALLOWED_ALERT_LIFECYCLE_STATUSES)}), 400
+    if status not in ALLOWED_ALERT_LIFECYCLE_STATUSES:
+        return jsonify({"error": "invalid_status", "allowed_statuses": sorted(ALLOWED_ALERT_LIFECYCLE_STATUSES)}), 400
+    owner = payload.get("owner", payload.get("alert_owner"))
+    notes = payload.get("notes", payload.get("alert_notes"))
+    now_field = {
+        "ACKNOWLEDGED": "acknowledged_at",
+        "TRIAGED": "acknowledged_at",
+        "INVESTIGATING": "acknowledged_at",
+        "CONTAINED": "resolved_at",
+        "RESOLVED": "resolved_at",
+        "FALSE_POSITIVE": "closed_at",
+        "CLOSED": "closed_at",
+    }.get(status)
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, event_id, tenant_id, lifecycle_status, alert_owner, alert_notes,
+                       acknowledged_at, resolved_at, closed_at, false_positive
+                FROM alertas
+                WHERE tenant_id = %s AND (event_id::text = %s OR id::text = %s)
+                LIMIT 1
+                """,
+                (tenant_id(), alert_id, alert_id),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+            existing = row_to_dict(row, columns) if row else None
+            if not existing:
+                return jsonify({"error": "not_found", "alert_id": alert_id}), 404
+            cur.execute(
+                f"""
+                UPDATE alertas
+                SET lifecycle_status = %s,
+                    alert_owner = COALESCE(%s, alert_owner),
+                    alert_notes = COALESCE(%s, alert_notes),
+                    false_positive = %s,
+                    acknowledged_at = CASE WHEN %s = 'acknowledged_at' AND acknowledged_at IS NULL THEN NOW() ELSE acknowledged_at END,
+                    resolved_at = CASE WHEN %s = 'resolved_at' AND resolved_at IS NULL THEN NOW() ELSE resolved_at END,
+                    closed_at = CASE WHEN %s = 'closed_at' AND closed_at IS NULL THEN NOW() ELSE closed_at END
+                WHERE tenant_id = %s AND (event_id::text = %s OR id::text = %s)
+                RETURNING id, event_id, tenant_id, lifecycle_status, alert_owner, alert_notes,
+                          acknowledged_at, resolved_at, closed_at, false_positive
+                """,
+                (
+                    status,
+                    str(owner)[:200] if owner is not None else None,
+                    str(notes)[:2000] if notes is not None else None,
+                    status == "FALSE_POSITIVE",
+                    now_field,
+                    now_field,
+                    now_field,
+                    tenant_id(),
+                    alert_id,
+                    alert_id,
+                ),
+            )
+            updated_row = cur.fetchone()
+            updated_columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        conn.commit()
+        updated = row_to_dict(updated_row, updated_columns)
+        write_audit(
+            action="alert_lifecycle_updated",
+            resource_type="alert",
+            resource_id=alert_id,
+            success=True,
+            metadata={
+                "from": existing.get("lifecycle_status"),
+                "to": status,
+                "owner_changed": owner is not None,
+                "notes_changed": notes is not None,
+            },
+        )
+        return jsonify(updated), 200
+    finally:
+        conn.close()
 
 
 @app.get("/historico")
@@ -3075,12 +3619,14 @@ def search():
 
 
 @app.get("/audit")
-@require_role("admin")
+@require_role("admin", "auditor")
 def audit_logs():
     REQUEST_COUNTER.labels(endpoint="audit").inc()
-    limit, _ = pagination_params(default_limit=100, max_limit=500)
+    limit, offset = pagination_params(default_limit=100, max_limit=500)
     action = request.args.get("action")
     resource_type = request.args.get("resource_type")
+    actor_user = request.args.get("actor_user")
+    success = request.args.get("success")
     filters = ["tenant_id = %s"]
     params = [tenant_id()]
     if action:
@@ -3089,7 +3635,13 @@ def audit_logs():
     if resource_type:
         filters.append("resource_type = %s")
         params.append(resource_type)
-    params.append(limit)
+    if actor_user:
+        filters.append("actor_user = %s")
+        params.append(actor_user)
+    if success is not None:
+        filters.append("success = %s")
+        params.append(str(success).strip().lower() in {"1", "true", "yes", "ok"})
+    params.extend([limit, offset])
     conn = ensure_connection()
     try:
         with conn.cursor() as cur:
@@ -3097,11 +3649,12 @@ def audit_logs():
                 f"""
                 SELECT id, timestamp, tenant_id, actor_user, actor_role, action,
                        resource_type, resource_id, correlation_id, source_ip,
+                       request_method, request_path, user_agent, session_id,
                        success, metadata_json
                 FROM audit_logs
                 WHERE {' AND '.join(filters)}
                 ORDER BY timestamp DESC
-                LIMIT %s
+                LIMIT %s OFFSET %s
                 """,
                 tuple(params),
             )
@@ -3281,10 +3834,10 @@ def update_incident(incident_id):
                     continue
                 cur.execute(
                     """
-                    INSERT INTO incident_audit_log (incident_id, field_changed, old_value, new_value, changed_by, changed_at)
-                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    INSERT INTO incident_audit_log (incident_id, tenant_id, field_changed, old_value, new_value, changed_by, changed_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
                     """,
-                    (incident_id, field, str(old_value or ""), str(new_value or ""), (current_identity() or {}).get("sub", SENTINELA_USER)),
+                    (incident_id, tenant_id(), field, str(old_value or ""), str(new_value or ""), (current_identity() or {}).get("sub", SENTINELA_USER)),
                 )
             cur.execute(
                 """

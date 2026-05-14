@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sentinela
+  labels:
+    app.kubernetes.io/name: sentinela
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "2m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - sentinela.example.com
+      secretName: sentinela-tls
+  rules:
+    - host: sentinela.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sentinela-web
+                port:
+                  name: http
+          - path: /ready
+            pathType: Prefix
+            backend:
+              service:
+                name: sentinela-api
+                port:
+                  name: http
+          - path: /alerts
+            pathType: Prefix
+            backend:
+              service:
+                name: sentinela-api
+                port:
+                  name: http

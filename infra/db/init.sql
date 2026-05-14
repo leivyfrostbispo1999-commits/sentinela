@@ -115,6 +115,13 @@ ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_notes TEXT;
 ALTER TABLE alertas ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default';
 ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT;
 ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS lifecycle_status TEXT DEFAULT 'NEW';
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS alert_owner TEXT;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS alert_notes TEXT DEFAULT '';
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+ALTER TABLE alertas ADD COLUMN IF NOT EXISTS false_positive BOOLEAN DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_alertas_ts ON alertas (ts DESC);
 CREATE INDEX IF NOT EXISTS idx_alertas_ip ON alertas (ip);
@@ -214,6 +221,7 @@ CREATE TABLE IF NOT EXISTS incident_alerts (
 CREATE TABLE IF NOT EXISTS incident_audit_log (
     id SERIAL PRIMARY KEY,
     incident_id TEXT NOT NULL,
+    tenant_id TEXT DEFAULT 'default',
     field_changed TEXT NOT NULL,
     old_value TEXT,
     new_value TEXT,
@@ -295,8 +303,52 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     resource_id TEXT,
     correlation_id TEXT,
     source_ip TEXT,
+    request_method TEXT,
+    request_path TEXT,
+    user_agent TEXT,
+    session_id TEXT,
     success BOOLEAN DEFAULT TRUE,
     metadata_json JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'viewer',
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    email TEXT,
+    full_name TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    last_login_at TIMESTAMPTZ,
+    created_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    session_id UUID PRIMARY KEY,
+    username TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    source_ip TEXT,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    jti UUID PRIMARY KEY,
+    session_id UUID REFERENCES auth_sessions(session_id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    replaced_by UUID
 );
 
 ALTER TABLE alertas ADD COLUMN IF NOT EXISTS campaign_id TEXT;
@@ -317,3 +369,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_incidents_idempotency_key ON incidents (id
 CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_ts ON audit_logs (tenant_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs (resource_type);
+CREATE INDEX IF NOT EXISTS idx_users_tenant_username ON users (tenant_id, username);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (tenant_id, username, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_session ON refresh_tokens (session_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens (tenant_id, username, created_at DESC);

@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sentinela-postgres
+spec:
+  template:
+    spec:
+      nodeSelector:
+        sentinela-role: data
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sentinela-redis
+spec:
+  template:
+    spec:
+      nodeSelector:
+        sentinela-role: data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinela-api
+spec:
+  replicas: 1
+  template:
+    spec:
+      nodeSelector:
+        sentinela-role: app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinela-web
+spec:
+  replicas: 1
+  template:
+    spec:
+      nodeSelector:
+        sentinela-role: app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinela-log-collector
+spec:
+  replicas: 1
+  template:
+    spec:
+      nodeSelector:
+        sentinela-role: app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinela-enrichment-worker
+spec:
+  replicas: 1
+  template:
+    spec:
+      nodeSelector:
+        sentinela-role: app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinela-rule-engine
+spec:
+  replicas: 1
+  template:
+    spec:
+      nodeSelector:
+        sentinela-role: app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinela-alert-sink
+spec:
+  replicas: 1
+  template:
+    spec:
+      nodeSelector:
+        sentinela-role: app

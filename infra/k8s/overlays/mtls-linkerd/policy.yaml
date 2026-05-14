@@ -1,0 +1,59 @@
+apiVersion: policy.linkerd.io/v1beta3
+kind: Server
+metadata:
+  name: sentinela-api
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard-api
+  port: http
+  proxyProtocol: HTTP/1
+---
+apiVersion: policy.linkerd.io/v1beta3
+kind: Server
+metadata:
+  name: sentinela-kafka
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  port: broker
+  proxyProtocol: opaque
+---
+apiVersion: policy.linkerd.io/v1alpha1
+kind: MeshTLSAuthentication
+metadata:
+  name: sentinela-mesh-only
+spec:
+  identities:
+    - sentinela-api.sentinela.serviceaccount.identity.linkerd.cluster.local
+    - sentinela-worker.sentinela.serviceaccount.identity.linkerd.cluster.local
+    - sentinela-observability.sentinela.serviceaccount.identity.linkerd.cluster.local
+---
+apiVersion: policy.linkerd.io/v1alpha1
+kind: AuthorizationPolicy
+metadata:
+  name: sentinela-api-mesh-only
+spec:
+  targetRef:
+    group: policy.linkerd.io
+    kind: Server
+    name: sentinela-api
+  requiredAuthenticationRefs:
+    - name: sentinela-mesh-only
+      kind: MeshTLSAuthentication
+      group: policy.linkerd.io
+---
+apiVersion: policy.linkerd.io/v1alpha1
+kind: AuthorizationPolicy
+metadata:
+  name: sentinela-kafka-mesh-only
+spec:
+  targetRef:
+    group: policy.linkerd.io
+    kind: Server
+    name: sentinela-kafka
+  requiredAuthenticationRefs:
+    - name: sentinela-mesh-only
+      kind: MeshTLSAuthentication
+      group: policy.linkerd.io

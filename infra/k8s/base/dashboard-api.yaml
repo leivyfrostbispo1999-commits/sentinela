@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinela-api
+  labels:
+    app.kubernetes.io/name: dashboard-api
+    app.kubernetes.io/part-of: sentinela
+spec:
+  ports:
+    - name: http
+      port: 5000
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: dashboard-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinela-api
+  labels:
+    app.kubernetes.io/name: dashboard-api
+    app.kubernetes.io/part-of: sentinela
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dashboard-api
+        app.kubernetes.io/part-of: sentinela
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "5000"
+    spec:
+      serviceAccountName: sentinela-api
+      containers:
+        - name: dashboard-api
+          image: sentinela/dashboard-api:latest
+          ports:
+            - name: http
+              containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: sentinela-config
+            - secretRef:
+                name: sentinela-secrets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 750m
+              memory: 768Mi

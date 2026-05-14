@@ -1,0 +1,34 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sentinela
+spec:
+  tls:
+    - hosts:
+        - sentinela.local
+      secretName: sentinela-tls-dev
+  rules:
+    - host: sentinela.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sentinela-web
+                port:
+                  name: http
+          - path: /ready
+            pathType: Prefix
+            backend:
+              service:
+                name: sentinela-api
+                port:
+                  name: http
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: sentinela-api
+                port:
+                  name: http

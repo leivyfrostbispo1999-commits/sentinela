@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinela-nats
+  labels:
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/part-of: sentinela
+spec:
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitoring
+      port: 8222
+      targetPort: monitoring
+  selector:
+    app.kubernetes.io/name: nats
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sentinela-nats
+  labels:
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/part-of: sentinela
+spec:
+  serviceName: sentinela-nats
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nats
+        app.kubernetes.io/part-of: sentinela
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /varz
+        prometheus.io/port: "8222"
+    spec:
+      serviceAccountName: sentinela-worker
+      nodeSelector:
+        sentinela-role: app
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          args:
+            - --jetstream
+            - --store_dir=/data/jetstream
+            - --http_port=8222
+            - --max_memory_store=128M
+            - --max_file_store=1G
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitoring
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitoring
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitoring
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: nats-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: nats-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 3Gi

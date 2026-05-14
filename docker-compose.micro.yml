@@ -62,7 +62,10 @@ services:
       DB_HOST: db
       SENTINELA_ENV: production
       SENTINELA_JWT_SECRET: ${SENTINELA_JWT_SECRET}
-      ENABLE_AUTH: "false"
+      ENABLE_AUTH: "true"
+      ENABLE_RATE_LIMITING: "true"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      REFRESH_TOKEN_EXPIRE_MINUTES: "10080"
     depends_on:
       db:
         condition: service_healthy

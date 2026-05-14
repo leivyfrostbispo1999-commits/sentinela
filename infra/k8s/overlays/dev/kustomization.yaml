@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - path: patch-dev.yaml
+
+images:
+  - name: ghcr.io/leivybispo/sentinela-dashboard-api
+    newTag: dev
+  - name: ghcr.io/leivybispo/sentinela-dashboard-web
+    newTag: dev
+  - name: ghcr.io/leivybispo/sentinela-log-collector
+    newTag: dev
+  - name: ghcr.io/leivybispo/sentinela-enrichment-worker
+    newTag: dev
+  - name: ghcr.io/leivybispo/sentinela-rule-engine
+    newTag: dev
+  - name: ghcr.io/leivybispo/sentinela-alert-sink
+    newTag: dev

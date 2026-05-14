@@ -1,0 +1,44 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sentinela
+
+resources:
+  - ../../base/namespace.yaml
+  - ../../base/rbac.yaml
+  - ../../base/configmap.yaml
+  - ../../base/networkpolicy.yaml
+  - ../../base/postgres.yaml
+  - ../../base/redis.yaml
+  - nats.yaml
+  - ../../base/dashboard-api.yaml
+  - ../../base/dashboard-web.yaml
+  - observability-lite.yaml
+  - ingress.yaml
+  - hpa-lite.yaml
+  - pdb-lite.yaml
+
+patches:
+  - path: patch-free-tier-config.yaml
+  - path: patch-node-placement.yaml
+  - path: patch-resource-limits.yaml
+
+images:
+  - name: sentinela/dashboard-api
+    newName: ghcr.io/leivybispo/sentinela-dashboard-api
+    newTag: stable
+  - name: sentinela/dashboard-web
+    newName: ghcr.io/leivybispo/sentinela-dashboard-web
+    newTag: stable
+  - name: sentinela/log-collector
+    newName: ghcr.io/leivybispo/sentinela-log-collector
+    newTag: stable
+  - name: sentinela/enrichment-worker
+    newName: ghcr.io/leivybispo/sentinela-enrichment-worker
+    newTag: stable
+  - name: sentinela/rule-engine
+    newName: ghcr.io/leivybispo/sentinela-rule-engine
+    newTag: stable
+  - name: sentinela/alert-sink
+    newName: ghcr.io/leivybispo/sentinela-alert-sink
+    newTag: stable
