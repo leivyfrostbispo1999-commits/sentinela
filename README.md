@@ -137,7 +137,9 @@ python tools/performance/load_generator.py
 ```
 
 ### Visualizar Dashboard
-Acesse: [http://localhost:5000](http://localhost:5000)
+Acesse o ambiente Oracle publicado: [https://levi-sentinela.duckdns.org/](https://levi-sentinela.duckdns.org/)
+
+Para execução local, use o frontend em [http://localhost:8080](http://localhost:8080) depois de subir o Docker Compose.
 
 ## 📁 Estrutura do Projeto
 - `services/`: Microsserviços (Rule Engine, UEBA, Lifecycle, Dashboard API, etc.).
