@@ -160,3 +160,40 @@ Prometheus metrics added for pipeline visibility:
 - `sentinela_events_by_event_type{event_type}` for event type distribution.
 - `sentinela_dlq_items{status}` for pending, failed and resolved DLQ depth.
 - `sentinela_dlq_retry_total{result}` for retry outcomes.
+# Distributed Event Pipeline
+
+The distributed pipeline now has a production-like NATS path:
+
+1. Fluent Bit tails Linux, SSH, sudo, nginx and Docker logs.
+2. Raw records are published to `sentinela.logs.raw`.
+3. `parser_engine` normalizes records to the unified schema.
+4. `detection_engine` applies YAML rules with MITRE enrichment.
+5. Alerts are published to `sentinela.alerts.detections`.
+6. Alerts are POSTed to the core API `/ingest/alerts`.
+7. The existing dashboard and `/ws/alerts` stream show the new alerts without refresh.
+
+Unified event schema:
+
+```json
+{
+  "timestamp": "",
+  "host": "",
+  "source_ip": "",
+  "destination_ip": "",
+  "event_type": "",
+  "severity": "",
+  "username": "",
+  "raw_log": "",
+  "tags": [],
+  "technique": "",
+  "service": ""
+}
+```
+
+Operational commands:
+
+```bash
+./ops/oci/start_distributed_ingestion.sh
+./ops/oci/check_distributed_pipeline.sh
+./ops/oci/stop_distributed_ingestion.sh
+```

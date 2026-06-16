@@ -1,0 +1,7 @@
+[run]
+omit =
+    services/parser_engine/main.py
+    services/detection_engine/main.py
+
+[report]
+show_missing = true

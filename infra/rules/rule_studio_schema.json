@@ -1,0 +1,4 @@
+{
+  "required": ["rule_id", "title", "description", "severity", "score", "tactic", "technique", "conditions", "aggregation", "timeframe", "enabled"],
+  "severity": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+}

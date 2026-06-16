@@ -373,3 +373,62 @@ CREATE INDEX IF NOT EXISTS idx_users_tenant_username ON users (tenant_id, userna
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (tenant_id, username, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_session ON refresh_tokens (session_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens (tenant_id, username, created_at DESC);
+
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS slug TEXT;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS retention_days INTEGER DEFAULT 30;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS max_users INTEGER DEFAULT 25;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_slug ON tenants (slug) WHERE slug IS NOT NULL;
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_users_tenant_role ON users (tenant_id, role);
+CREATE INDEX IF NOT EXISTS idx_users_locked_until ON users (locked_until);
+
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS user_id INTEGER;
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS last_refresh_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_active ON auth_sessions (tenant_id, expires_at) WHERE revoked_at IS NULL;
+
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_id INTEGER;
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS target_type TEXT;
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS target_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs (tenant_id, target_type, target_id);
+
+CREATE TABLE IF NOT EXISTS incident_events (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT DEFAULT 'default',
+    incident_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    correlation_id TEXT,
+    source_ip TEXT,
+    hostname TEXT,
+    username TEXT,
+    event_type TEXT,
+    severity TEXT,
+    score INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS incident_timeline (
+    id SERIAL PRIMARY KEY,
+    tenant_id TEXT DEFAULT 'default',
+    incident_id TEXT NOT NULL,
+    event_id TEXT,
+    event_type TEXT NOT NULL,
+    title TEXT,
+    severity TEXT,
+    score INTEGER DEFAULT 0,
+    correlation_id TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    payload JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_incident_events_created_at ON incident_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_incident_events_correlation_id ON incident_events (correlation_id);
+CREATE INDEX IF NOT EXISTS idx_incident_events_source_ip ON incident_events (source_ip);
+CREATE INDEX IF NOT EXISTS idx_incident_events_tenant_id ON incident_events (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_incident_timeline_created_at ON incident_timeline (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_incident_timeline_correlation_id ON incident_timeline (correlation_id);
+CREATE INDEX IF NOT EXISTS idx_incident_timeline_tenant_id ON incident_timeline (tenant_id);

@@ -1,0 +1,71 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  hardening-tests:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
+      SENTINELA_ENV: development
+      SENTINELA_JWT_SECRET: ci-test-secret
+      SENTINELA_API_TOKEN: ci-test-token
+      ENABLE_AUTH: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          for f in services/*/requirements.txt; do python -m pip install -r "$f"; done
+
+      - name: Syntax validation
+        run: |
+          python -m py_compile \
+            services/parser_engine/parser.py services/parser_engine/main.py \
+            services/detection_engine/engine.py services/detection_engine/main.py \
+            services/ingestion_worker/main.py services/websocket_gateway/main.py \
+            services/dashboard_api/main.py
+
+      - name: Lint
+        run: |
+          ruff check services/parser_engine services/detection_engine services/ingestion_worker services/websocket_gateway \
+            services/timeline_engine services/correlation_engine services/replay_engine \
+            tests/test_parser_engine.py tests/test_detection_engine.py tests/test_ingestion_worker.py \
+            tests/test_websocket_gateway.py tests/test_dashboard_api_hardening.py tests/test_e2e_pipeline.py tests/test_productization.py
+          black --check services/parser_engine services/detection_engine services/ingestion_worker services/websocket_gateway \
+            services/timeline_engine services/correlation_engine services/replay_engine \
+            tests/test_parser_engine.py tests/test_detection_engine.py tests/test_ingestion_worker.py \
+            tests/test_websocket_gateway.py tests/test_dashboard_api_hardening.py tests/test_e2e_pipeline.py tests/test_productization.py
+
+      - name: Type check
+        run: mypy --explicit-package-bases services/parser_engine services/detection_engine services/ingestion_worker services/websocket_gateway services/timeline_engine services/correlation_engine services/replay_engine
+
+      - name: Compose validation
+        run: |
+          docker compose -f docker-compose.eventbus.yml config
+          docker compose -f docker-compose.eventbus.yml -f docker-compose.ingestion.yml --profile gateway config
+          docker compose -f docker-compose.micro.yml config
+
+      - name: Pytest with coverage
+        run: |
+          pytest -q \
+            --cov=services/parser_engine \
+            --cov=services/detection_engine \
+            --cov=services/ingestion_worker \
+            --cov=services/websocket_gateway \
+            --cov=services/timeline_engine \
+            --cov=services/correlation_engine \
+            --cov=services/replay_engine \
+            --cov-report=term-missing \
+            --cov-fail-under=85

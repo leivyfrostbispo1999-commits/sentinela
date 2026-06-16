@@ -1,0 +1,22 @@
+id: port_scan
+name: Indicador de port scan
+description: Evidencia de varredura de portas em logs de rede ou sistema.
+severity: HIGH
+score: 78
+event_type: PORT_SCAN
+condition:
+  raw_log_contains:
+    - nmap
+    - port scan
+    - masscan
+group_by: source_ip
+window_seconds: 300
+threshold: 1
+mitre:
+  tactic: Discovery
+  technique: T1046
+  technique_name: Network Service Discovery
+tags:
+  - scan
+  - discovery
+

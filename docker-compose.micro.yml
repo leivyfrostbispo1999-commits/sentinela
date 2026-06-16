@@ -34,14 +34,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-    mem_limit: 96m
+    mem_limit: 160m
     cpus: "0.15"
     networks:
       - sentinela-micro-net
@@ -64,7 +64,7 @@ services:
       SENTINELA_JWT_SECRET: ${SENTINELA_JWT_SECRET}
       ENABLE_AUTH: "true"
       ENABLE_RATE_LIMITING: "true"
-      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "15"
       REFRESH_TOKEN_EXPIRE_MINUTES: "10080"
     depends_on:
       db:
@@ -105,6 +105,34 @@ services:
       start_period: 10s
     mem_limit: 64m
     cpus: "0.15"
+    networks:
+      - sentinela-micro-net
+
+  event_simulator:
+    build:
+      context: ./services/event_simulator
+    container_name: sentinela-event-simulator
+    restart: always
+    env_file:
+      - .env
+    environment:
+      CORE_API_URL: http://dashboard_api:5000
+      SENTINELA_API_TOKEN: ${SENTINELA_API_TOKEN:-sentinela-demo-token}
+      TENANT_ID: default
+      SIMULATOR_MODE: baseline
+      SIMULATOR_MIN_INTERVAL_SECONDS: "2.0"
+      SIMULATOR_MAX_INTERVAL_SECONDS: "3.0"
+      KAFKA_ENABLED: "false"
+    depends_on:
+      dashboard_api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    mem_limit: 80m
+    cpus: "0.10"
     networks:
       - sentinela-micro-net
 

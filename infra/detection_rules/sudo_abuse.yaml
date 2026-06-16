@@ -1,0 +1,26 @@
+id: sudo_abuse
+name: Possivel abuso de sudo
+description: Uso de sudo com comandos sensiveis ou transferencia de payload.
+severity: HIGH
+score: 80
+event_type: PRIVILEGE_ESCALATION
+condition:
+  event_type: SUDO_COMMAND
+  raw_log_contains:
+    - COMMAND=/bin/su
+    - COMMAND=/usr/bin/passwd
+    - COMMAND=/usr/bin/curl
+    - COMMAND=/usr/bin/wget
+    - chmod
+    - chown
+group_by: username
+window_seconds: 300
+threshold: 1
+mitre:
+  tactic: Privilege Escalation
+  technique: T1548
+  technique_name: Abuse Elevation Control Mechanism
+tags:
+  - sudo
+  - privilege_escalation
+

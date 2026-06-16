@@ -1,0 +1,22 @@
+id: suspicious_curl_wget
+name: Suspicious curl or wget
+description: Uso de curl/wget em contexto de autenticacao, sudo ou execucao suspeita.
+severity: MEDIUM
+score: 60
+event_type: SUSPICIOUS_DOWNLOAD
+condition:
+  raw_log_contains:
+    - curl
+    - wget
+group_by: host
+window_seconds: 300
+threshold: 1
+mitre:
+  tactic: Command and Control
+  technique: T1105
+  technique_name: Ingress Tool Transfer
+tags:
+  - curl
+  - wget
+  - payload_transfer
+

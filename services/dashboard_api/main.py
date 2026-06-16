@@ -20,6 +20,17 @@ from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, G
 from sentinela_secrets import resolve_secret
 
 try:
+    from passlib.context import CryptContext
+except ImportError:
+    CryptContext = None
+
+try:
+    from flask_socketio import SocketIO, emit
+except ImportError:
+    SocketIO = None
+    emit = None
+
+try:
     from flask_sock import Sock
 except ImportError:
     Sock = None
@@ -50,7 +61,15 @@ SENTINELA_ENV = os.getenv("SENTINELA_ENV", "development").strip().lower()
 CORS_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", os.getenv("CORS_ORIGINS", "*"))
 CORS(app, resources={r"/*": {"origins": CORS_ORIGINS.split(",") if CORS_ORIGINS != "*" else "*"}})
 sock = Sock(app) if Sock else None
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="gevent",
+    ping_timeout=20,
+    ping_interval=25,
+) if SocketIO else None
 SCHEMA_INITIALIZED = False
+LAST_CLEANUP_AT = 0
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "db"),
@@ -62,7 +81,7 @@ DB_CONFIG = {
 
 API_TOKEN = os.getenv("SENTINELA_API_TOKEN", "sentinela-demo-token")
 JWT_SECRET = resolve_secret("SENTINELA_JWT_SECRET", default="sentinela-demo-jwt-secret", required=SENTINELA_ENV == "production")
-JWT_TTL_SECONDS = int(os.getenv("SENTINELA_JWT_TTL_SECONDS", str(int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")) * 60)))
+JWT_TTL_SECONDS = int(os.getenv("SENTINELA_JWT_TTL_SECONDS", str(int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15")) * 60)))
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(max(1, JWT_TTL_SECONDS // 60))))
 REFRESH_TOKEN_EXPIRE_MINUTES = int(os.getenv("REFRESH_TOKEN_EXPIRE_MINUTES", "10080"))
 ENABLE_AUTH = os.getenv("ENABLE_AUTH", "false").lower() == "true"
@@ -73,14 +92,20 @@ OPENSEARCH_INDEX_ALERTS = os.getenv("OPENSEARCH_INDEX_ALERTS", "sentinela-alerts
 SENTINELA_USER = os.getenv("SENTINELA_USER", "admin")
 SENTINELA_PASSWORD = os.getenv("SENTINELA_PASSWORD", "sentinela")
 DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "default")
-VALID_ROLES = {"super_admin", "admin", "analyst", "viewer", "auditor"}
+VALID_ROLES = {"super_admin", "admin", "analyst", "viewer", "operator", "auditor"}
 ROLE_PERMISSIONS = {
-    "super_admin": ["auth:read", "audit:read", "incident:read", "incident:update", "tenant:write", "user:manage", "playbook:approve", "report:export", "alert:update"],
-    "admin": ["auth:read", "audit:read", "incident:read", "incident:update", "tenant:write", "user:manage", "playbook:approve", "report:export", "alert:update"],
-    "analyst": ["auth:read", "incident:read", "incident:update", "playbook:approve", "report:export", "alert:update"],
+    "super_admin": ["auth:read", "audit:read", "incident:read", "incident:update", "tenant:write", "user:manage", "playbook:approve", "report:export", "alert:update", "rule:write", "replay:write", "session:manage"],
+    "admin": ["auth:read", "audit:read", "incident:read", "incident:update", "tenant:write", "user:manage", "playbook:approve", "report:export", "alert:update", "rule:write", "replay:write", "session:manage"],
+    "analyst": ["auth:read", "incident:read", "incident:update", "playbook:approve", "report:export", "alert:update", "hunting:read", "ioc:read", "timeline:read"],
+    "operator": ["auth:read", "incident:read", "incident:update", "alert:update", "rule:write", "replay:write"],
     "auditor": ["auth:read", "audit:read", "incident:read", "report:export"],
-    "viewer": ["auth:read", "incident:read", "report:export"],
+    "viewer": ["auth:read", "incident:read"],
 }
+PASSWORD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto") if CryptContext else None
+BCRYPT_MAX_PASSWORD_BYTES = 72
+PASSWORD_MIN_LENGTH = int(os.getenv("SENTINELA_PASSWORD_MIN_LENGTH", "10"))
+MAX_FAILED_LOGIN_ATTEMPTS = int(os.getenv("MAX_FAILED_LOGIN_ATTEMPTS", "5"))
+LOCKOUT_MINUTES = int(os.getenv("LOCKOUT_MINUTES", "15"))
 MAX_BACKOFF_SECONDS = float(os.getenv("MAX_BACKOFF_SECONDS", "10"))
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "240"))
 ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "false").lower() == "true"
@@ -155,7 +180,24 @@ INCIDENTS_SEVERITY_GAUGE = Gauge("sentinela_incidents_by_severity", "Incidentes 
 EVENTS_PER_MINUTE_GAUGE = Gauge("sentinela_events_processed_per_minute", "Eventos processados por minuto", registry=REGISTRY)
 WEBSOCKET_CONNECTIONS = Gauge("sentinela_websocket_connections", "Conexoes WebSocket ativas", registry=REGISTRY)
 PROCESSED_EVENTS_BY_TENANT = Gauge("sentinela_processed_events_by_tenant", "Eventos processados por tenant nas ultimas 24h", ["tenant_id"], registry=REGISTRY)
+INGESTED_ALERTS = Counter("sentinela_ingested_alerts_total", "Alertas recebidos pelo endpoint distribuido", ["source"], registry=REGISTRY)
+INGEST_REJECTED = Counter("sentinela_ingest_rejected_total", "Alertas rejeitados pelo endpoint distribuido", ["reason"], registry=REGISTRY)
+AUTH_LOGIN_SUCCESS = Counter("sentinela_auth_login_success_total", "Logins bem-sucedidos", ["tenant_id", "role"], registry=REGISTRY)
+AUTH_LOGIN_FAILURE = Counter("sentinela_auth_login_failure_total", "Falhas de login", ["reason"], registry=REGISTRY)
+AUTH_REFRESH_TOTAL = Counter("sentinela_auth_refresh_total", "Refresh tokens rotacionados", ["tenant_id"], registry=REGISTRY)
+RBAC_DENIALS = Counter("sentinela_rbac_denials_total", "Negacoes RBAC", ["role", "endpoint"], registry=REGISTRY)
+BRUTE_FORCE_ATTEMPTS = Counter("sentinela_bruteforce_attempts_total", "Tentativas de brute force contra login", ["username"], registry=REGISTRY)
+ACTIVE_SESSIONS = Gauge("sentinela_active_sessions", "Sessoes ativas persistidas", ["tenant_id"], registry=REGISTRY)
+USERS_BY_TENANT = Gauge("sentinela_users_by_tenant", "Usuarios ativos por tenant", ["tenant_id"], registry=REGISTRY)
+TIMELINE_LATENCY = Histogram("sentinela_timeline_generation_seconds", "Latencia de geracao de timeline", registry=REGISTRY)
+CORRELATION_LATENCY = Histogram("sentinela_correlation_seconds", "Latencia de correlacao leve", registry=REGISTRY)
+REPLAY_THROUGHPUT = Counter("sentinela_replay_events_total", "Eventos processados por replay", ["mode"], registry=REGISTRY)
+REPLAY_QUEUE_SIZE = Gauge("sentinela_replay_queue_size", "Tamanho da fila de replay", registry=REGISTRY)
+RULE_EXECUTION_LATENCY = Histogram("sentinela_rule_execution_seconds", "Latencia de simulacao de regra", registry=REGISTRY)
+FALSE_POSITIVE_COUNTER = Counter("sentinela_false_positive_total", "Alertas marcados como falso positivo", registry=REGISTRY)
+IOC_LOOKUP_LATENCY = Histogram("sentinela_ioc_lookup_seconds", "Latencia de IOC lookup", ["ioc_type"], registry=REGISTRY)
 RATE_LIMIT_BUCKETS = defaultdict(deque)
+REPLAY_JOBS = {}
 RATE_LIMIT_ENDPOINTS = {
     ("POST", "/auth/token"): "auth",
     ("POST", "/auth/refresh"): "auth",
@@ -199,9 +241,9 @@ def set_trace_attrs(**attrs):
 def handle_unexpected_error(exc):
     status = getattr(exc, "code", 500) or 500
     if status < 500:
-        return jsonify({"error": getattr(exc, "name", "bad_request")}), status
+        return jsonify({"error": getattr(exc, "name", "bad_request"), "message": "Requisição inválida ou malformada"}), status
     log_json("ERROR", "Erro interno tratado", error=str(exc), path=request.path if has_request_context() else None)
-    payload = {"error": "internal_server_error"}
+    payload = {"error": "internal_server_error", "message": "Ocorreu um erro interno no servidor"}
     if SENTINELA_ENV != "production":
         payload["detail"] = str(exc)
     return jsonify(payload), 500
@@ -213,9 +255,38 @@ def pbkdf2_hash(password, salt=None, iterations=200000):
     return f"pbkdf2_sha256${iterations}${salt}${_b64url_encode(digest)}"
 
 
+def password_policy_errors(password):
+    password = str(password or "")
+    errors = []
+    if len(password) < PASSWORD_MIN_LENGTH:
+        errors.append(f"minimum_length_{PASSWORD_MIN_LENGTH}")
+    if not re.search(r"[A-Z]", password):
+        errors.append("uppercase_required")
+    if not re.search(r"[a-z]", password):
+        errors.append("lowercase_required")
+    if not re.search(r"\d", password):
+        errors.append("digit_required")
+    return errors
+
+
+def hash_password(password):
+    raw_password = str(password or "")
+    if PASSWORD_CONTEXT and len(raw_password.encode("utf-8")) <= BCRYPT_MAX_PASSWORD_BYTES:
+        return PASSWORD_CONTEXT.hash(raw_password)
+    return pbkdf2_hash(password)
+
+
 def verify_password(password, stored):
     if not stored:
         return False
+    if str(stored).startswith("$2") and PASSWORD_CONTEXT:
+        try:
+            raw_password = str(password or "")
+            if len(raw_password.encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
+                return False
+            return PASSWORD_CONTEXT.verify(raw_password, str(stored))
+        except Exception:
+            return False
     if str(stored).startswith("pbkdf2_sha256$"):
         try:
             _, raw_iterations, salt, expected = str(stored).split("$", 3)
@@ -495,6 +566,12 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'simulation'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_status TEXT DEFAULT 'not_executed'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS execution_notes TEXT")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS event_schema_version TEXT DEFAULT 'sentinela.event.v2'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS pipeline_priority TEXT DEFAULT 'medium'")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS pipeline_retry_count INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS max_retry_count INTEGER DEFAULT 3")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS retry_strategy TEXT DEFAULT 'exponential_backoff'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS tenant_id TEXT DEFAULT 'default'")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS correlation_id TEXT")
         cur.execute("ALTER TABLE alertas ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
@@ -525,15 +602,26 @@ def ensure_schema(conn):
             """
             CREATE TABLE IF NOT EXISTS tenants (
                 tenant_id TEXT PRIMARY KEY,
+                slug TEXT,
+                company_name TEXT,
                 name TEXT NOT NULL,
                 plan_id TEXT DEFAULT 'free' REFERENCES plans(plan_id),
                 api_key TEXT UNIQUE NOT NULL,
                 status TEXT DEFAULT 'active',
+                is_active BOOLEAN DEFAULT TRUE,
+                retention_days INTEGER DEFAULT 30,
+                max_users INTEGER DEFAULT 25,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS slug TEXT")
+        cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS company_name TEXT")
+        cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+        cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS retention_days INTEGER DEFAULT 30")
+        cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS max_users INTEGER DEFAULT 25")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_slug ON tenants (slug) WHERE slug IS NOT NULL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS billing_records (
@@ -577,6 +665,9 @@ def ensure_schema(conn):
                 full_name TEXT,
                 is_active BOOLEAN DEFAULT TRUE,
                 last_login_at TIMESTAMPTZ,
+                last_login TIMESTAMPTZ,
+                failed_login_attempts INTEGER DEFAULT 0,
+                locked_until TIMESTAMPTZ,
                 created_by TEXT,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -589,6 +680,9 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by TEXT")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP")
@@ -602,7 +696,7 @@ def ensure_schema(conn):
                 """,
                 (
                     username,
-                    user.get("password_hash"),
+                    user.get("password_hash") if str(user.get("password_hash") or "").startswith(("$2", "pbkdf2_sha256$")) else hash_password(user.get("password_hash") or "SentinelaAdmin1"),
                     user.get("role") if user.get("role") in VALID_ROLES else "viewer",
                     user.get("tenant_id") or DEFAULT_TENANT_ID,
                 ),
@@ -614,6 +708,7 @@ def ensure_schema(conn):
                 username TEXT NOT NULL,
                 tenant_id TEXT NOT NULL,
                 role TEXT NOT NULL,
+                user_id INTEGER,
                 source_ip TEXT,
                 user_agent TEXT,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -623,6 +718,8 @@ def ensure_schema(conn):
             )
             """
         )
+        cur.execute("ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS user_id INTEGER")
+        cur.execute("ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS last_refresh_at TIMESTAMPTZ")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (tenant_id, username, created_at DESC)")
         cur.execute(
             """
@@ -806,6 +903,9 @@ def ensure_schema(conn):
                 request_path TEXT,
                 user_agent TEXT,
                 session_id TEXT,
+                user_id INTEGER,
+                target_type TEXT,
+                target_id TEXT,
                 success BOOLEAN DEFAULT TRUE,
                 metadata_json JSONB DEFAULT '{}'::jsonb
             )
@@ -815,9 +915,84 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS request_path TEXT")
         cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent TEXT")
         cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS session_id TEXT")
+        cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_id INTEGER")
+        cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS target_type TEXT")
+        cur.execute("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS target_id TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_ts ON audit_logs (tenant_id, timestamp DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs (resource_type)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS incident_events (
+                id SERIAL PRIMARY KEY,
+                tenant_id TEXT DEFAULT 'default',
+                incident_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                correlation_id TEXT,
+                source_ip TEXT,
+                hostname TEXT,
+                username TEXT,
+                event_type TEXT,
+                severity TEXT,
+                score INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS incident_timeline (
+                id SERIAL PRIMARY KEY,
+                tenant_id TEXT DEFAULT 'default',
+                incident_id TEXT NOT NULL,
+                event_id TEXT,
+                event_type TEXT NOT NULL,
+                title TEXT,
+                severity TEXT,
+                score INTEGER DEFAULT 0,
+                correlation_id TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                payload JSONB DEFAULT '{}'::jsonb
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_events_created_at ON incident_events (created_at DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_events_correlation_id ON incident_events (correlation_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_events_source_ip ON incident_events (source_ip)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_events_tenant_id ON incident_events (tenant_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_timeline_created_at ON incident_timeline (created_at DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_timeline_correlation_id ON incident_timeline (correlation_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_incident_timeline_tenant_id ON incident_timeline (tenant_id)")
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pinned_entities (
+                id SERIAL PRIMARY KEY,
+                tenant_id TEXT DEFAULT 'default',
+                entity_type TEXT NOT NULL,
+                entity_value TEXT NOT NULL,
+                notes TEXT,
+                pinned_by TEXT,
+                pinned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (tenant_id, entity_type, entity_value)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS raw_events (
+                id SERIAL PRIMARY KEY,
+                tenant_id TEXT DEFAULT 'default',
+                source_ip TEXT,
+                event_type TEXT,
+                payload JSONB,
+                ingested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_ts ON alertas (ts DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_alertas_ip ON alertas (COALESCE(source_ip, ip))")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_ingested_at ON raw_events (ingested_at DESC)")
     conn.commit()
 
 
@@ -830,13 +1005,15 @@ def _b64url_decode(data):
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
 
 
-def create_jwt(subject="sentinela-demo", ttl_seconds=None, role="admin", tenant_id=None, token_use="access"):
+def create_jwt(subject="sentinela-demo", ttl_seconds=None, role="admin", tenant_id=None, token_use="access", session_id=None, user_id=None):
     ttl = JWT_TTL_SECONDS if ttl_seconds is None else int(ttl_seconds)
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
         "sub": subject,
         "role": role if role in VALID_ROLES else "viewer",
         "tenant_id": tenant_id or DEFAULT_TENANT_ID,
+        "user_id": user_id,
+        "session_id": session_id,
         "token_use": token_use,
         "jti": str(uuid.uuid4()),
         "iat": int(time.time()),
@@ -881,6 +1058,7 @@ def db_user_to_identity(user):
         return None
     role = user.get("role", "viewer")
     return {
+        "user_id": user.get("id"),
         "sub": user["username"],
         "role": role if role in VALID_ROLES else "viewer",
         "tenant_id": user.get("tenant_id") or DEFAULT_TENANT_ID,
@@ -891,8 +1069,8 @@ def fetch_user_record(conn, username):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT username, password_hash, role, tenant_id, email, full_name, is_active,
-                   last_login_at, created_at, updated_at
+            SELECT id, username, password_hash, role, tenant_id, email, full_name, is_active,
+                   last_login_at, last_login, failed_login_attempts, locked_until, created_at, updated_at
             FROM users
             WHERE username = %s
             """,
@@ -908,11 +1086,39 @@ def authenticate_user_db(username, password):
     try:
         conn = ensure_connection()
         user = fetch_user_record(conn, username or "")
+        if user and user.get("locked_until") and user.get("locked_until") > datetime.now(timezone.utc):
+            BRUTE_FORCE_ATTEMPTS.labels(username=username or "unknown").inc()
+            return {"error": "user_locked", "tenant_id": user.get("tenant_id") or DEFAULT_TENANT_ID}
         if user and user.get("is_active") and verify_password(password, user.get("password_hash")):
             with conn.cursor() as cur:
-                cur.execute("UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE username = %s", (username,))
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET last_login_at = NOW(), last_login = NOW(), failed_login_attempts = 0,
+                        locked_until = NULL, updated_at = NOW()
+                    WHERE username = %s
+                    """,
+                    (username,),
+                )
             conn.commit()
             return db_user_to_identity(user)
+        if user:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET failed_login_attempts = COALESCE(failed_login_attempts, 0) + 1,
+                        locked_until = CASE
+                            WHEN COALESCE(failed_login_attempts, 0) + 1 >= %s
+                            THEN NOW() + (%s || ' minutes')::interval
+                            ELSE locked_until
+                        END,
+                        updated_at = NOW()
+                    WHERE username = %s
+                    """,
+                    (MAX_FAILED_LOGIN_ATTEMPTS, LOCKOUT_MINUTES, username),
+                )
+            conn.commit()
     except Exception as exc:
         log_json("WARN", "Falha na autenticacao por banco; usando fallback local", error=str(exc), username=username)
     finally:
@@ -926,6 +1132,8 @@ def authenticate_user_db(username, password):
 
 def authenticate_user(username, password):
     identity = authenticate_user_db(username, password)
+    if isinstance(identity, dict) and identity.get("error"):
+        return identity
     if identity:
         return identity
     user = USERS.get(username or "")
@@ -943,32 +1151,36 @@ def public_identity(identity):
     identity = identity or {}
     role = identity.get("role") if identity.get("role") in VALID_ROLES else "viewer"
     return {
+        "user_id": identity.get("user_id"),
         "sub": identity.get("sub"),
+        "username": identity.get("sub"),
         "role": role,
         "tenant_id": identity.get("tenant_id") or DEFAULT_TENANT_ID,
+        "session_id": identity.get("session_id"),
         "permissions": ROLE_PERMISSIONS.get(role, ROLE_PERMISSIONS["viewer"]),
         "auth_enabled": ENABLE_AUTH,
     }
 
 
-def create_persisted_session(identity, refresh_token, refresh_payload):
+def create_persisted_session(identity, refresh_token, refresh_payload, session_id=None):
     conn = None
-    session_id = str(uuid.uuid4())
+    session_id = session_id or str(uuid.uuid4())
     try:
         conn = ensure_connection()
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO auth_sessions (
-                    session_id, username, tenant_id, role, source_ip, user_agent, expires_at
+                    session_id, username, tenant_id, role, user_id, source_ip, user_agent, expires_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     session_id,
                     identity.get("sub"),
                     identity.get("tenant_id") or DEFAULT_TENANT_ID,
                     identity.get("role") or "viewer",
+                    identity.get("user_id"),
                     request_source_ip(),
                     request.headers.get("User-Agent") if has_request_context() else None,
                     utc_from_epoch(refresh_payload["exp"]),
@@ -1017,6 +1229,7 @@ def validate_refresh_token_record(raw_token, decoded):
                 """
                 SELECT rt.jti, rt.session_id, rt.username, rt.tenant_id, rt.token_hash,
                        rt.expires_at, rt.revoked_at, s.revoked_at AS session_revoked_at,
+                       s.user_id,
                        u.role, u.is_active
                 FROM refresh_tokens rt
                 JOIN auth_sessions s ON s.session_id = rt.session_id
@@ -1038,6 +1251,7 @@ def validate_refresh_token_record(raw_token, decoded):
             "sub": record.get("username") or decoded.get("sub"),
             "role": record.get("role") or decoded.get("role", "viewer"),
             "tenant_id": record.get("tenant_id") or decoded.get("tenant_id") or DEFAULT_TENANT_ID,
+            "user_id": record.get("user_id") or decoded.get("user_id"),
             "session_id": str(record.get("session_id")),
         }
         return record, identity
@@ -1079,7 +1293,10 @@ def rotate_refresh_token_record(old_record, new_refresh_token, new_refresh_paylo
                     utc_from_epoch(new_refresh_payload["exp"]),
                 ),
             )
-            cur.execute("UPDATE auth_sessions SET last_seen_at = NOW(), expires_at = %s WHERE session_id = %s", (utc_from_epoch(new_refresh_payload["exp"]), old_record["session_id"]))
+            cur.execute(
+                "UPDATE auth_sessions SET last_seen_at = NOW(), last_refresh_at = NOW(), expires_at = %s WHERE session_id = %s",
+                (utc_from_epoch(new_refresh_payload["exp"]), old_record["session_id"]),
+            )
         conn.commit()
         return str(old_record["session_id"])
     except Exception as exc:
@@ -1108,7 +1325,14 @@ def current_identity():
         raw_token = bearer.split(" ", 1)[1].strip()
         payload = decode_jwt(raw_token)
         if payload and payload.get("token_use") == "access":
-            return {"sub": payload.get("sub"), "role": payload.get("role", "viewer"), "tenant_id": payload.get("tenant_id") or DEFAULT_TENANT_ID, "jti": payload.get("jti")}
+            return {
+                "user_id": payload.get("user_id"),
+                "sub": payload.get("sub"),
+                "role": payload.get("role", "viewer"),
+                "tenant_id": payload.get("tenant_id") or DEFAULT_TENANT_ID,
+                "session_id": payload.get("session_id"),
+                "jti": payload.get("jti"),
+            }
         if hmac.compare_digest(raw_token, API_TOKEN):
             return {"sub": "legacy-token", "role": "admin", "tenant_id": request.headers.get("X-Tenant-ID") or DEFAULT_TENANT_ID}
     basic = request.authorization
@@ -1141,6 +1365,7 @@ def require_auth(view=None, roles=None):
             if not identity:
                 return jsonify({"error": "unauthorized"}), 401
             if identity.get("role") not in allowed_roles:
+                RBAC_DENIALS.labels(role=identity.get("role") or "unknown", endpoint=request.path).inc()
                 write_audit(
                     action="authorization_denied",
                     resource_type="endpoint",
@@ -1192,9 +1417,9 @@ def write_audit(action, resource_type=None, resource_id=None, success=True, meta
                 INSERT INTO audit_logs (
                     tenant_id, actor_user, actor_role, action, resource_type, resource_id,
                     correlation_id, source_ip, request_method, request_path, user_agent, session_id,
-                    success, metadata_json
+                    user_id, target_type, target_id, success, metadata_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 """,
                 (
                     tenant or identity.get("tenant_id") or DEFAULT_TENANT_ID,
@@ -1209,6 +1434,9 @@ def write_audit(action, resource_type=None, resource_id=None, success=True, meta
                     request.path if has_request_context() else None,
                     request.headers.get("User-Agent") if has_request_context() else None,
                     identity.get("session_id") or identity.get("jti"),
+                    identity.get("user_id"),
+                    resource_type,
+                    resource_id,
                     bool(success),
                     json.dumps(metadata, ensure_ascii=False),
                 ),
@@ -1227,6 +1455,33 @@ def write_audit(action, resource_type=None, resource_id=None, success=True, meta
                 conn.close()
             except Exception:
                 pass
+
+
+def emit_realtime_event(event_type, payload):
+    if not socketio:
+        return False
+    try:
+        socketio.emit(event_type, payload)
+        socketio.emit("sentinela_event", {"type": event_type, "payload": payload})
+        return True
+    except Exception as exc:
+        log_json("WARN", "Falha ao emitir realtime", event_type=event_type, error=str(exc))
+        return False
+
+
+def maybe_cleanup_retention(conn):
+    global LAST_CLEANUP_AT
+    now = time.time()
+    if now - LAST_CLEANUP_AT < 3600:
+        return
+    LAST_CLEANUP_AT = now
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM incident_timeline WHERE created_at < NOW() - INTERVAL '7 days'")
+            cur.execute("DELETE FROM incident_events WHERE created_at < NOW() - INTERVAL '7 days'")
+            cur.execute("DELETE FROM refresh_tokens WHERE expires_at < NOW() - INTERVAL '3 days'")
+    except Exception as exc:
+        log_json("WARN", "Cleanup de retencao falhou", error=str(exc))
 
 
 def demo_mode_enabled():
@@ -1417,6 +1672,145 @@ def enrich_alert(alert):
     alert["human_summary"] = human_summary_for_alert(alert)
     alert["explanation"] = alert["human_summary"]
     return alert
+
+
+def coerce_uuid(value, seed):
+    try:
+        return str(uuid.UUID(str(value)))
+    except Exception:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, str(seed or value or uuid.uuid4())))
+
+
+def persist_ingested_alert(conn, alert, identity):
+    alert = dict(alert or {})
+    raw_event = alert.get("raw_event") if isinstance(alert.get("raw_event"), dict) else alert
+    tenant = identity.get("tenant_id") or alert.get("tenant_id") or DEFAULT_TENANT_ID
+    event_id = coerce_uuid(alert.get("event_id"), alert.get("idempotency_key") or json.dumps(raw_event, sort_keys=True, default=str))
+    source_ip = alert.get("source_ip") or alert.get("ip") or raw_event.get("source_ip") or "0.0.0.0"
+    score = int(alert.get("score_final") or alert.get("risco") or alert.get("threat_score") or 0)
+    severity = str(alert.get("severity") or severity_from_score(score)).upper()
+    mitre_techniques = alert.get("mitre_techniques") or []
+    if alert.get("mitre_id") and not mitre_techniques:
+        mitre_techniques = [{"technique": alert.get("mitre_id"), "technique_name": alert.get("mitre_name"), "tactic": alert.get("mitre_tactic")}]
+
+    enriched = enrich_alert({
+        **alert,
+        "event_id": event_id,
+        "ip": source_ip,
+        "source_ip": source_ip,
+        "score_final": score,
+        "risco": score,
+        "threat_score": score,
+        "severity": severity,
+        "tenant_id": tenant,
+        "raw_event": raw_event,
+        "event_type": alert.get("event_type") or raw_event.get("event_type") or "SIEM_ALERT",
+    })
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO alertas (
+                event_id, ip, status, risco, score_final, ts, "timestamp",
+                source_ip, threat_score, severity, mitre_id, mitre_name, mitre_tactic,
+                human_summary, explanation, reasons, correlation_reasons,
+                event_count, service, event_type, ip_event_count, risk_reasons,
+                raw_event, mitre_techniques, internal_rule_id, internal_rule_name,
+                correlation_rule, response_playbook, detection_source, alert_type,
+                score_breakdown, score_explanation, target_host, target_ip,
+                target_user, target_service, recommended_action, action_reason,
+                execution_mode, execution_status, execution_notes,
+                event_schema_version, pipeline_priority, pipeline_retry_count,
+                max_retry_count, retry_strategy, tenant_id, correlation_id,
+                idempotency_key, lifecycle_status
+            )
+            VALUES (
+                %(event_id)s, %(ip)s, %(status)s, %(risco)s, %(score_final)s,
+                COALESCE(%(ts)s::timestamptz, NOW()),
+                COALESCE(%(ts)s::timestamptz, NOW()),
+                %(source_ip)s, %(threat_score)s, %(severity)s,
+                %(mitre_id)s, %(mitre_name)s, %(mitre_tactic)s,
+                %(human_summary)s, %(explanation)s,
+                %(reasons)s::jsonb, %(correlation_reasons)s::jsonb,
+                %(event_count)s, %(service)s, %(event_type)s, %(ip_event_count)s,
+                %(risk_reasons)s::jsonb, %(raw_event)s::jsonb,
+                %(mitre_techniques)s::jsonb, %(internal_rule_id)s, %(internal_rule_name)s,
+                %(correlation_rule)s, %(response_playbook)s, %(detection_source)s, %(alert_type)s,
+                %(score_breakdown)s::jsonb, %(score_explanation)s, %(target_host)s, %(target_ip)s,
+                %(target_user)s, %(target_service)s, %(recommended_action)s, %(action_reason)s,
+                %(execution_mode)s, %(execution_status)s, %(execution_notes)s,
+                %(event_schema_version)s, %(pipeline_priority)s, %(pipeline_retry_count)s,
+                %(max_retry_count)s, %(retry_strategy)s, %(tenant_id)s, %(correlation_id)s,
+                %(idempotency_key)s, 'NEW'
+            )
+            ON CONFLICT (event_id) DO UPDATE SET
+                ts = EXCLUDED.ts,
+                "timestamp" = EXCLUDED."timestamp",
+                status = EXCLUDED.status,
+                risco = EXCLUDED.risco,
+                score_final = EXCLUDED.score_final,
+                source_ip = EXCLUDED.source_ip,
+                threat_score = EXCLUDED.threat_score,
+                severity = EXCLUDED.severity,
+                human_summary = EXCLUDED.human_summary,
+                explanation = EXCLUDED.explanation,
+                event_count = GREATEST(alertas.event_count, EXCLUDED.event_count),
+                raw_event = EXCLUDED.raw_event,
+                tenant_id = EXCLUDED.tenant_id,
+                lifecycle_status = COALESCE(alertas.lifecycle_status, 'NEW')
+            """,
+            {
+                "event_id": event_id,
+                "ip": enriched.get("ip"),
+                "status": enriched.get("status") or enriched.get("internal_rule_name") or "SIEM detection",
+                "risco": enriched.get("risco"),
+                "score_final": enriched.get("score_final"),
+                "ts": alert.get("ts") or alert.get("timestamp") or raw_event.get("timestamp"),
+                "source_ip": enriched.get("source_ip"),
+                "threat_score": enriched.get("threat_score"),
+                "severity": enriched.get("severity"),
+                "mitre_id": enriched.get("mitre_id"),
+                "mitre_name": enriched.get("mitre_name"),
+                "mitre_tactic": enriched.get("mitre_tactic"),
+                "human_summary": enriched.get("human_summary"),
+                "explanation": enriched.get("explanation"),
+                "reasons": json.dumps(enriched.get("reasons", []), ensure_ascii=False),
+                "correlation_reasons": json.dumps(enriched.get("correlation_reasons", []), ensure_ascii=False),
+                "event_count": int(enriched.get("event_count") or 1),
+                "service": enriched.get("service"),
+                "event_type": enriched.get("event_type"),
+                "ip_event_count": int(enriched.get("ip_event_count") or enriched.get("event_count") or 1),
+                "risk_reasons": json.dumps(enriched.get("risk_reasons", []), ensure_ascii=False),
+                "raw_event": json.dumps(raw_event, ensure_ascii=False),
+                "mitre_techniques": json.dumps(mitre_techniques or enriched.get("mitre_techniques", []), ensure_ascii=False),
+                "internal_rule_id": enriched.get("internal_rule_id"),
+                "internal_rule_name": enriched.get("internal_rule_name"),
+                "correlation_rule": enriched.get("correlation_rule"),
+                "response_playbook": enriched.get("response_playbook"),
+                "detection_source": enriched.get("detection_source") or "distributed_ingest",
+                "alert_type": enriched.get("alert_type") or "alert",
+                "score_breakdown": json.dumps(enriched.get("score_breakdown", {}), ensure_ascii=False),
+                "score_explanation": enriched.get("score_explanation"),
+                "target_host": enriched.get("target_host"),
+                "target_ip": enriched.get("target_ip"),
+                "target_user": enriched.get("target_user"),
+                "target_service": enriched.get("target_service"),
+                "recommended_action": enriched.get("recommended_action"),
+                "action_reason": enriched.get("action_reason"),
+                "execution_mode": enriched.get("execution_mode") or "simulation",
+                "execution_status": enriched.get("execution_status") or "not_executed",
+                "execution_notes": enriched.get("execution_notes"),
+                "event_schema_version": enriched.get("event_schema_version") or "sentinela.event.v3",
+                "pipeline_priority": enriched.get("pipeline_priority") or "medium",
+                "pipeline_retry_count": int(enriched.get("pipeline_retry_count") or 0),
+                "max_retry_count": int(enriched.get("max_retry_count") or 3),
+                "retry_strategy": enriched.get("retry_strategy") or "exponential_backoff",
+                "tenant_id": tenant,
+                "correlation_id": enriched.get("correlation_id") or event_id,
+                "idempotency_key": enriched.get("idempotency_key") or event_id,
+            },
+        )
+    return event_id
 
 
 def flatten_json_lists(values):
@@ -1621,6 +2015,106 @@ def build_timeline(alerts):
             "simulated_block": bool(alert.get("simulated_block")),
         })
     return items
+
+
+def build_enterprise_timeline(incident_id, alerts, correlation_window_seconds=300):
+    started = time.time()
+    ordered = sorted(alerts, key=lambda item: datetime_from_value(item.get("ts") or item.get("timestamp")))
+    timeline = []
+    accumulated = 0
+    previous_ts = None
+    mitre_sequence = []
+    correlation_ids = set()
+    for index, alert in enumerate(ordered):
+        dt = datetime_from_value(alert.get("ts") or alert.get("timestamp"))
+        score = alert_score(alert)
+        accumulated = min(100, accumulated + max(1, score // 10))
+        mitre_id = alert.get("mitre_id") or alert.get("technique") or ""
+        if mitre_id and mitre_id not in mitre_sequence:
+            mitre_sequence.append(mitre_id)
+        correlation_id = alert.get("correlation_id") or alert.get("idempotency_key") or alert.get("event_id")
+        if correlation_id:
+            correlation_ids.add(str(correlation_id))
+        gap = int((dt - previous_ts).total_seconds()) if previous_ts else None
+        previous_ts = dt
+        timeline.append({
+            "timestamp": dt.isoformat(),
+            "event_type": alert.get("event_type") or "UNKNOWN",
+            "severity": str(alert.get("severity") or severity_from_score(score)).upper(),
+            "message": alert.get("human_summary") or alert.get("explanation") or alert.get("status") or "Evento correlacionado",
+            "mitre_technique": mitre_id,
+            "mitre_tactic": alert.get("mitre_tactic") or "",
+            "host": alert.get("target_host") or alert.get("host") or "",
+            "source_ip": alert.get("source_ip") or alert.get("ip") or "",
+            "username": alert.get("target_user") or alert.get("username") or "",
+            "container": alert.get("target_container") or "",
+            "session_id": alert.get("session_id") or "",
+            "score": score,
+            "accumulated_score": accumulated,
+            "sequence_index": index + 1,
+            "correlation_id": correlation_id,
+            "related_to_previous": gap is None or gap <= correlation_window_seconds,
+            "gap_seconds": gap,
+            "badges": [item for item in [str(alert.get("severity") or "").upper(), mitre_id, alert.get("service")] if item],
+        })
+    TIMELINE_LATENCY.observe(time.time() - started)
+    return {
+        "incident_id": incident_id,
+        "risk_score": max([alert_score(alert) for alert in ordered], default=0),
+        "accumulated_score": accumulated,
+        "event_count": len(timeline),
+        "mitre_sequence": mitre_sequence,
+        "correlation_ids": sorted(correlation_ids),
+        "timeline": timeline,
+    }
+
+
+def build_light_correlation(alerts):
+    started = time.time()
+    graph = defaultdict(set)
+    by_user = defaultdict(lambda: {"event_count": 0, "hosts": set(), "max_score": 0})
+    by_source = defaultdict(set)
+    counts = defaultdict(int)
+    for alert in alerts:
+        entities = {
+            "source_ip": alert.get("source_ip") or alert.get("ip"),
+            "destination_ip": alert.get("target_ip"),
+            "username": alert.get("target_user") or alert.get("username"),
+            "hostname": alert.get("target_host") or alert.get("host"),
+            "container": alert.get("target_container"),
+            "session_id": alert.get("session_id"),
+        }
+        keys = [f"{key}:{value}" for key, value in entities.items() if value]
+        for left in keys:
+            for right in keys:
+                if left != right:
+                    graph[left].add(right)
+        user = entities.get("username")
+        if user:
+            item = by_user[user]
+            item["event_count"] += 1
+            if entities.get("hostname"):
+                item["hosts"].add(entities["hostname"])
+            item["max_score"] = max(item["max_score"], alert_score(alert))
+        if entities.get("source_ip") and entities.get("hostname"):
+            by_source[entities["source_ip"]].add(entities["hostname"])
+        for value in (entities.get("source_ip"), alert.get("mitre_id"), user):
+            if value:
+                counts[str(value)] += 1
+    ordered = sorted(alerts, key=lambda item: datetime_from_value(item.get("ts") or item.get("timestamp")))
+    result = {
+        "entity_graph": {key: sorted(values) for key, values in graph.items()},
+        "attack_chains": [build_enterprise_timeline("chain", ordered)["timeline"]] if ordered else [],
+        "lateral_movement_indicators": [{"source_ip": ip, "hosts": sorted(hosts), "host_count": len(hosts)} for ip, hosts in by_source.items() if len(hosts) > 1],
+        "repeated_iocs": [{"ioc": key, "count": value} for key, value in counts.items() if value >= 3],
+        "user_behavior": {user: {"event_count": data["event_count"], "hosts": sorted(data["hosts"]), "max_score": data["max_score"]} for user, data in by_user.items()},
+    }
+    CORRELATION_LATENCY.observe(time.time() - started)
+    return result
+
+
+def sanitize_filter(value, limit=120):
+    return re.sub(r"[^a-zA-Z0-9_@.:\-/* ]", "", str(value or ""))[:limit].strip()
 
 
 def bucket_start(dt, bucket_minutes):
@@ -2194,10 +2688,67 @@ def materialize_incidents(conn, alerts):
             incident = correlate_alert_to_incident(conn, alert)
             if incident:
                 materialized.append(incident)
+                persist_incident_event_and_timeline(conn, incident, alert)
         except Exception as exc:
             log_json("WARN", "Falha ao materializar incidente; alerta preservado", error=str(exc), event_id=alert.get("event_id"))
     conn.commit()
     return materialized
+
+
+def persist_incident_event_and_timeline(conn, incident, alert):
+    event_id = str(alert.get("event_id") or alert.get("id") or uuid.uuid4())
+    score = int(alert.get("score_final") or alert.get("threat_score") or alert.get("risco") or 0)
+    payload = {
+        "source_ip": alert.get("source_ip") or alert.get("ip"),
+        "target_host": alert.get("target_host") or alert.get("hostname"),
+        "username": alert.get("target_user") or alert.get("username"),
+        "mitre_id": alert.get("mitre_id") or alert.get("mitre_technique"),
+        "summary": alert.get("human_summary") or alert.get("message"),
+    }
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO incident_events (
+                tenant_id, incident_id, event_id, correlation_id, source_ip, hostname,
+                username, event_type, severity, score, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s::timestamptz, NOW()))
+            """,
+            (
+                incident.get("tenant_id") or alert.get("tenant_id") or tenant_id(),
+                incident.get("incident_id"),
+                event_id,
+                alert.get("correlation_id") or incident.get("correlation_id"),
+                alert.get("source_ip") or alert.get("ip"),
+                alert.get("target_host") or alert.get("hostname"),
+                alert.get("target_user") or alert.get("username"),
+                alert.get("event_type"),
+                alert.get("severity"),
+                score,
+                alert.get("ts") or alert.get("timestamp"),
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO incident_timeline (
+                tenant_id, incident_id, event_id, event_type, title, severity,
+                score, correlation_id, created_at, payload
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s::timestamptz, NOW()), %s::jsonb)
+            """,
+            (
+                incident.get("tenant_id") or alert.get("tenant_id") or tenant_id(),
+                incident.get("incident_id"),
+                event_id,
+                alert.get("event_type") or "SECURITY_EVENT",
+                alert.get("human_summary") or alert.get("status") or "Evento correlacionado",
+                alert.get("severity"),
+                score,
+                alert.get("correlation_id") or incident.get("correlation_id"),
+                alert.get("ts") or alert.get("timestamp"),
+                json.dumps(payload, ensure_ascii=False, default=str),
+            ),
+        )
 
 
 def fetch_persisted_incidents(conn, limit=100, offset=0):
@@ -2458,6 +3009,55 @@ def read_rules_config():
     return {"source": "defaults", "fallback": True, "rules": normalize_rules(defaults)}
 
 
+def rule_studio_path():
+    for candidate in RULES_CANDIDATES:
+        try:
+            if candidate.exists():
+                return candidate
+        except Exception:
+            continue
+    return RULES_CANDIDATES[0]
+
+
+def validate_studio_rule(rule):
+    required = {"rule_id", "title", "description", "severity", "score", "tactic", "technique", "conditions", "aggregation", "timeframe", "enabled"}
+    missing = sorted(required - set(rule))
+    errors = []
+    if missing:
+        errors.append(f"missing_fields:{','.join(missing)}")
+    if str(rule.get("severity", "")).upper() not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+        errors.append("invalid_severity")
+    try:
+        score = int(rule.get("score", 0))
+        if score < 0 or score > 100:
+            errors.append("invalid_score")
+    except Exception:
+        errors.append("invalid_score")
+    if not isinstance(rule.get("conditions"), (dict, list, str)):
+        errors.append("invalid_conditions")
+    return errors
+
+
+def studio_rule_to_detection(rule):
+    return {
+        "name": rule.get("rule_id") or rule.get("title"),
+        "description": rule.get("description"),
+        "enabled": bool(rule.get("enabled", True)),
+        "event_type": (rule.get("conditions") or {}).get("event_type") if isinstance(rule.get("conditions"), dict) else rule.get("rule_id"),
+        "score": int(rule.get("score") or 0),
+        "severity": str(rule.get("severity") or "LOW").upper(),
+        "threshold": (rule.get("aggregation") or {}).get("threshold", 1) if isinstance(rule.get("aggregation"), dict) else 1,
+        "window_seconds": int(rule.get("timeframe") or 60) if str(rule.get("timeframe") or "60").isdigit() else 60,
+        "mitre_id": rule.get("technique"),
+        "mitre_name": rule.get("technique"),
+        "mitre_tactic": rule.get("tactic"),
+        "tags": ["rule_studio"],
+        "correlation_key": "source_ip",
+        "action": "monitor",
+        "studio": rule,
+    }
+
+
 def normalize_rules(rules):
     normalized = []
     for rule in rules:
@@ -2630,7 +3230,19 @@ def build_metrics_payload(conn):
         increment_bucket(incident_severity, incident.get("severity"))
         if len(json_list(incident.get("source_ips"))) > 1:
             multi_ip_incidents += 1
+            
     top_ips = sorted(by_ip.values(), key=lambda item: (item["max_score"], item["event_count"]), reverse=True)
+    
+    # Calculate top ports
+    by_port = {}
+    for alert in alerts:
+        target_port = alert.get("target_port") or alert.get("port")
+        if target_port:
+            port_str = str(target_port)
+            by_port.setdefault(port_str, {"port": port_str, "count": 0})
+            by_port[port_str]["count"] += 1
+    top_ports = sorted(by_port.values(), key=lambda item: item["count"], reverse=True)[:5]
+    
     linked_alert_count = count_linked_alerts(conn)
     return {
         "generated_at": now_iso(),
@@ -2643,6 +3255,7 @@ def build_metrics_payload(conn):
         "severidade_por_periodo": severity_by_period,
         "top_ips_por_score": top_ips[:5],
         "top_ips_por_frequencia": sorted(top_ips, key=lambda item: item["event_count"], reverse=True)[:5],
+        "top_ports": top_ports,
         "tecnicas_mitre": mitre_frequency,
         "incidentes_por_status": incident_status,
         "incidentes_por_severidade": incident_severity,
@@ -2661,6 +3274,71 @@ def build_metrics_payload(conn):
         "eventos_por_tipo": events_by_type,
         "replay_vs_normal": replay_vs_normal,
     }
+
+
+@app.get("/api/hunting/pinned")
+@app.get("/hunting/pinned")
+@require_auth
+def get_pinned_entities():
+    REQUEST_COUNTER.labels(endpoint="hunting_pinned").inc()
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM pinned_entities WHERE tenant_id = %s ORDER BY pinned_at DESC",
+                (tenant_id(),)
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        return jsonify({"data": [row_to_dict(row, columns) for row in rows]})
+    finally:
+        conn.close()
+
+
+@app.post("/api/hunting/pin")
+@app.post("/hunting/pin")
+@require_role("admin", "analyst")
+def pin_entity():
+    REQUEST_COUNTER.labels(endpoint="hunting_pin").inc()
+    payload = request.get_json(silent=True) or {}
+    entity_type = sanitize_filter(payload.get("type"), 50)
+    entity_value = sanitize_filter(payload.get("value"), 160)
+    notes = sanitize_filter(payload.get("notes"), 500)
+    
+    if not entity_type or not entity_value:
+        return jsonify({"error": "missing_fields"}), 400
+        
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO pinned_entities (tenant_id, entity_type, entity_value, notes, pinned_by)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, entity_type, entity_value) 
+                DO UPDATE SET notes = EXCLUDED.notes, pinned_at = CURRENT_TIMESTAMP
+                RETURNING id
+                """,
+                (tenant_id(), entity_type, entity_value, notes, current_identity().get("sub"))
+            )
+        conn.commit()
+        return jsonify({"status": "ok"})
+    finally:
+        conn.close()
+
+
+@app.delete("/api/hunting/pinned/<int:pin_id>")
+@app.delete("/hunting/pinned/<int:pin_id>")
+@require_role("admin", "analyst")
+def unpin_entity(pin_id):
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pinned_entities WHERE id = %s AND tenant_id = %s", (pin_id, tenant_id()))
+        conn.commit()
+        return jsonify({"status": "ok"})
+    finally:
+        conn.close()
 
 
 def build_demo_alerts():
@@ -2959,6 +3637,12 @@ def refresh_prometheus_db_gauges(conn):
         cur.execute("SELECT COALESCE(tenant_id, %s), COUNT(*) FROM alertas WHERE ts >= NOW() - INTERVAL '24 hours' GROUP BY COALESCE(tenant_id, %s)", (DEFAULT_TENANT_ID, DEFAULT_TENANT_ID))
         for tenant, total in cur.fetchall() or []:
             PROCESSED_EVENTS_BY_TENANT.labels(tenant_id=tenant).set(int(total or 0))
+        cur.execute("SELECT tenant_id, COUNT(*) FROM auth_sessions WHERE revoked_at IS NULL AND expires_at > NOW() GROUP BY tenant_id")
+        for tenant, total in cur.fetchall() or []:
+            ACTIVE_SESSIONS.labels(tenant_id=tenant or DEFAULT_TENANT_ID).set(int(total or 0))
+        cur.execute("SELECT tenant_id, COUNT(*) FROM users WHERE is_active = TRUE GROUP BY tenant_id")
+        for tenant, total in cur.fetchall() or []:
+            USERS_BY_TENANT.labels(tenant_id=tenant or DEFAULT_TENANT_ID).set(int(total or 0))
 
 
 @app.get("/health")
@@ -2966,6 +3650,7 @@ def health():
     return jsonify({"status": "ok", "service": "dashboard_api", "ready": SCHEMA_INITIALIZED})
 
 
+@app.get("/api/admin/users")
 @app.get("/auth/users")
 @require_role("admin")
 def list_users():
@@ -2975,7 +3660,7 @@ def list_users():
             cur.execute(
                 """
                 SELECT username, role, tenant_id, email, full_name, is_active,
-                       last_login_at, created_at, updated_at
+                       last_login_at, last_login, failed_login_attempts, locked_until, created_at, updated_at
                 FROM users
                 WHERE tenant_id = %s
                 ORDER BY username
@@ -2989,6 +3674,7 @@ def list_users():
         conn.close()
 
 
+@app.post("/api/admin/users")
 @app.post("/auth/users")
 @require_role("admin")
 def create_user():
@@ -3000,6 +3686,9 @@ def create_user():
     identity = current_identity() or {}
     if not username or not password:
         return jsonify({"error": "username_and_password_required"}), 400
+    policy_errors = password_policy_errors(password)
+    if policy_errors:
+        return jsonify({"error": "password_policy_failed", "errors": policy_errors}), 400
     if role not in VALID_ROLES or role == "super_admin":
         return jsonify({"error": "invalid_role", "allowed_roles": sorted(VALID_ROLES - {"super_admin"})}), 400
     if identity.get("role") != "super_admin" and requested_tenant != identity.get("tenant_id"):
@@ -3015,7 +3704,7 @@ def create_user():
                 """,
                 (
                     username,
-                    pbkdf2_hash(password),
+                    hash_password(password),
                     role,
                     requested_tenant,
                     payload.get("email"),
@@ -3036,6 +3725,7 @@ def create_user():
         conn.close()
 
 
+@app.patch("/api/admin/users/<username>")
 @app.patch("/auth/users/<username>")
 @require_role("admin")
 def update_user(username):
@@ -3046,6 +3736,10 @@ def update_user(username):
         return jsonify({"error": "empty_update", "allowed_fields": sorted(allowed)}), 400
     if "role" in updates and (updates["role"] not in VALID_ROLES or updates["role"] == "super_admin"):
         return jsonify({"error": "invalid_role", "allowed_roles": sorted(VALID_ROLES - {"super_admin"})}), 400
+    if "password" in updates:
+        policy_errors = password_policy_errors(str(updates["password"]))
+        if policy_errors:
+            return jsonify({"error": "password_policy_failed", "errors": policy_errors}), 400
     conn = ensure_connection()
     try:
         existing = fetch_user_record(conn, username)
@@ -3055,7 +3749,9 @@ def update_user(username):
         params = []
         if "password" in updates:
             assignments.append("password_hash = %s")
-            params.append(pbkdf2_hash(str(updates["password"])))
+            params.append(hash_password(str(updates["password"])))
+            assignments.append("failed_login_attempts = 0")
+            assignments.append("locked_until = NULL")
         for field in ("role", "email", "full_name", "is_active"):
             if field in updates:
                 assignments.append(f"{field} = %s")
@@ -3067,7 +3763,7 @@ def update_user(username):
                 UPDATE users
                 SET {', '.join(assignments)}, updated_at = NOW()
                 WHERE username = %s AND tenant_id = %s
-                RETURNING username, role, tenant_id, email, full_name, is_active, last_login_at, created_at, updated_at
+                RETURNING username, role, tenant_id, email, full_name, is_active, last_login_at, last_login, failed_login_attempts, locked_until, created_at, updated_at
                 """,
                 tuple(params),
             )
@@ -3080,6 +3776,7 @@ def update_user(username):
         conn.close()
 
 
+@app.delete("/api/admin/users/<username>")
 @app.delete("/auth/users/<username>")
 @require_role("admin")
 def deactivate_user(username):
@@ -3093,7 +3790,7 @@ def deactivate_user(username):
                 UPDATE users
                 SET is_active = FALSE, updated_at = NOW()
                 WHERE username = %s AND tenant_id = %s
-                RETURNING username, role, tenant_id, email, full_name, is_active, last_login_at, created_at, updated_at
+                RETURNING username, role, tenant_id, email, full_name, is_active, last_login_at, last_login, failed_login_attempts, locked_until, created_at, updated_at
                 """,
                 (username, tenant_id()),
             )
@@ -3108,21 +3805,137 @@ def deactivate_user(username):
         conn.close()
 
 
+@app.post("/api/admin/users/<username>/lock")
+@app.post("/auth/users/<username>/lock")
+@require_role("admin")
+def lock_user(username):
+    if username == (current_identity() or {}).get("sub"):
+        return jsonify({"error": "cannot_lock_self"}), 400
+    minutes = int((request.get_json(silent=True) or {}).get("minutes") or LOCKOUT_MINUTES)
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET locked_until = NOW() + (%s || ' minutes')::interval, updated_at = NOW()
+                WHERE username = %s AND tenant_id = %s
+                RETURNING username, role, tenant_id, is_active, locked_until
+                """,
+                (minutes, username, tenant_id()),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        if not row:
+            return jsonify({"error": "not_found", "username": username}), 404
+        conn.commit()
+        write_audit(action="user_locked", resource_type="user", resource_id=username, success=True, metadata={"minutes": minutes})
+        return jsonify(row_to_dict(row, columns))
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/users/<username>/unlock")
+@app.post("/auth/users/<username>/unlock")
+@require_role("admin")
+def unlock_user(username):
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET locked_until = NULL, failed_login_attempts = 0, updated_at = NOW()
+                WHERE username = %s AND tenant_id = %s
+                RETURNING username, role, tenant_id, is_active, locked_until, failed_login_attempts
+                """,
+                (username, tenant_id()),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        if not row:
+            return jsonify({"error": "not_found", "username": username}), 404
+        conn.commit()
+        write_audit(action="user_unlocked", resource_type="user", resource_id=username, success=True)
+        return jsonify(row_to_dict(row, columns))
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/users/<username>/reset-password")
+@app.post("/auth/users/<username>/reset-password")
+@require_role("admin")
+def reset_user_password(username):
+    payload = request.get_json(silent=True) or {}
+    new_password = str(payload.get("password") or "")
+    policy_errors = password_policy_errors(new_password)
+    if policy_errors:
+        return jsonify({"error": "password_policy_failed", "errors": policy_errors}), 400
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET password_hash = %s, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW()
+                WHERE username = %s AND tenant_id = %s
+                RETURNING username, role, tenant_id, is_active
+                """,
+                (hash_password(new_password), username, tenant_id()),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+            cur.execute(
+                """
+                UPDATE refresh_tokens
+                SET revoked_at = NOW()
+                WHERE username = %s AND tenant_id = %s AND revoked_at IS NULL
+                """,
+                (username, tenant_id()),
+            )
+        if not row:
+            return jsonify({"error": "not_found", "username": username}), 404
+        conn.commit()
+        write_audit(action="password_reset", resource_type="user", resource_id=username, success=True)
+        return jsonify(row_to_dict(row, columns))
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/users/<username>/sessions")
+@app.get("/auth/users/<username>/sessions")
+@require_role("admin")
+def list_user_sessions(username):
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT session_id, username, tenant_id, role, source_ip, user_agent,
+                       created_at, last_seen_at, expires_at, revoked_at
+                FROM auth_sessions
+                WHERE username = %s AND tenant_id = %s
+                ORDER BY created_at DESC
+                LIMIT 50
+                """,
+                (username, tenant_id()),
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        return jsonify({"count": len(rows), "data": [row_to_dict(row, columns) for row in rows]})
+    finally:
+        conn.close()
+
+
 @app.get("/auth/permissions")
 @require_auth
 def list_permissions():
     identity = getattr(request, "sentinela_identity", {})
     role = identity.get("role", "viewer")
     
-    perms_map = {
-        "admin": ["alert:read", "alert:write", "incident:read", "incident:write", "user:manage", "audit:read"],
-        "analyst": ["alert:read", "alert:write", "incident:read", "incident:write"],
-        "viewer": ["alert:read", "incident:read"]
-    }
-    
     return jsonify({
         "role": role,
-        "permissions": perms_map.get(role, ["alert:read"])
+        "permissions": ROLE_PERMISSIONS.get(role, ROLE_PERMISSIONS["viewer"])
     })
 
 
@@ -3192,7 +4005,7 @@ def hunting_pivot():
     value = request.args.get("value")
     
     if not value:
-        return jsonify({"error": "missing_value"}), 400
+        return jsonify({"error": "missing_value", "message": "Valor obrigatório ausente na requisição."}), 400
         
     conn = ensure_connection()
     try:
@@ -3313,6 +4126,7 @@ def metrics_prometheus():
     return app.response_class(generate_latest(REGISTRY), mimetype=CONTENT_TYPE_LATEST)
 
 
+@app.get("/api/rules")
 @app.get("/rules")
 @require_auth
 def rules():
@@ -3321,6 +4135,91 @@ def rules():
     return jsonify({"count": len(payload["rules"]), **payload})
 
 
+@app.post("/api/rules")
+@app.post("/rules")
+@require_role("admin", "operator")
+def upsert_rule_studio():
+    REQUEST_COUNTER.labels(endpoint="rule_studio_upsert").inc()
+    if yaml is None:
+        return jsonify({"error": "yaml_unavailable"}), 503
+    payload = request.get_json(silent=True) or {}
+    rule = payload.get("rule", payload)
+    if not isinstance(rule, dict):
+        return jsonify({"error": "invalid_rule"}), 400
+    errors = validate_studio_rule(rule)
+    if errors:
+        return jsonify({"error": "validation_failed", "errors": errors}), 400
+    current = read_rules_config()
+    rules_list = current.get("rules", [])
+    detection_rule = studio_rule_to_detection(rule)
+    replaced = False
+    for index, existing in enumerate(rules_list):
+        if existing.get("name") == detection_rule["name"] or existing.get("studio", {}).get("rule_id") == rule.get("rule_id"):
+            rules_list[index] = detection_rule
+            replaced = True
+            break
+    if not replaced:
+        rules_list.append(detection_rule)
+    path = rule_studio_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump({"rules": rules_list}, handle, allow_unicode=True, sort_keys=False)
+    write_audit(
+        action="rule_studio_upsert",
+        resource_type="rule",
+        resource_id=rule.get("rule_id"),
+        success=True,
+        metadata={"replaced": replaced, "severity": rule.get("severity"), "technique": rule.get("technique")},
+    )
+    return jsonify({"status": "ok", "replaced": replaced, "rule": detection_rule})
+
+
+@app.post("/api/rules/validate")
+@app.post("/rules/validate")
+@require_role("admin", "operator")
+def validate_rule_studio():
+    rule = (request.get_json(silent=True) or {}).get("rule", request.get_json(silent=True) or {})
+    errors = validate_studio_rule(rule if isinstance(rule, dict) else {})
+    return jsonify({"valid": not errors, "errors": errors})
+
+
+@app.post("/api/rules/simulate")
+@app.post("/rules/simulate")
+@require_role("admin", "operator")
+def simulate_rule_studio():
+    started = time.time()
+    payload = request.get_json(silent=True) or {}
+    rule = payload.get("rule", {})
+    errors = validate_studio_rule(rule if isinstance(rule, dict) else {})
+    if errors:
+        return jsonify({"valid": False, "errors": errors}), 400
+    condition = rule.get("conditions") if isinstance(rule.get("conditions"), dict) else {}
+    conn = ensure_connection()
+    try:
+        alerts = fetch_alert_rows(conn, limit=500)
+        matches = []
+        for alert in alerts:
+            matched = True
+            for key, expected in condition.items():
+                if expected and str(alert.get(key) or alert.get("raw_event", {}).get(key) or "").upper() != str(expected).upper():
+                    matched = False
+                    break
+            if matched:
+                matches.append(alert)
+        RULE_EXECUTION_LATENCY.observe(time.time() - started)
+        return jsonify({
+            "valid": True,
+            "match_count": len(matches),
+            "false_positive_estimate": max(0, len(matches) - int((rule.get("aggregation") or {}).get("threshold", 1) if isinstance(rule.get("aggregation"), dict) else 1)),
+            "estimated_score": int(rule.get("score") or 0),
+            "timeline": build_enterprise_timeline(f"simulation:{rule.get('rule_id')}", matches[:50])["timeline"],
+            "matches": matches[:50],
+        })
+    finally:
+        conn.close()
+
+
+@app.post("/api/auth/login")
 @app.post("/auth/token")
 def auth_token():
     REQUEST_COUNTER.labels(endpoint="auth_token").inc()
@@ -3328,7 +4227,20 @@ def auth_token():
     identity = None
     if payload.get("username") or payload.get("password"):
         identity = authenticate_user(payload.get("username"), payload.get("password"))
+        if identity and identity.get("error") == "user_locked":
+            AUTH_LOGIN_FAILURE.labels(reason="user_locked").inc()
+            write_audit(
+                action="login_failed",
+                resource_type="auth",
+                resource_id=payload.get("username") or "unknown",
+                success=False,
+                identity={"sub": payload.get("username") or "unknown", "role": None, "tenant_id": identity.get("tenant_id") or DEFAULT_TENANT_ID},
+                metadata={"reason": "user_locked"},
+            )
+            return jsonify({"error": "user_locked", "message": "Usuário temporariamente bloqueado por tentativas inválidas"}), 423
         if not identity:
+            AUTH_LOGIN_FAILURE.labels(reason="invalid_credentials").inc()
+            BRUTE_FORCE_ATTEMPTS.labels(username=payload.get("username") or "unknown").inc()
             write_audit(
                 action="login_failed",
                 resource_type="auth",
@@ -3347,12 +4259,14 @@ def auth_token():
         identity = {"sub": SENTINELA_USER, "role": "admin", "tenant_id": DEFAULT_TENANT_ID}
     access_ttl = ACCESS_TOKEN_EXPIRE_MINUTES * 60
     refresh_ttl = REFRESH_TOKEN_EXPIRE_MINUTES * 60
-    access_token = create_jwt(subject=identity["sub"], ttl_seconds=access_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="access")
-    refresh_token = create_jwt(subject=identity["sub"], ttl_seconds=refresh_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="refresh")
+    session_id = str(uuid.uuid4())
+    access_token = create_jwt(subject=identity["sub"], ttl_seconds=access_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="access", session_id=session_id, user_id=identity.get("user_id"))
+    refresh_token = create_jwt(subject=identity["sub"], ttl_seconds=refresh_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="refresh", session_id=session_id, user_id=identity.get("user_id"))
     refresh_payload = decode_jwt(refresh_token) or {}
-    session_id = create_persisted_session(identity, refresh_token, refresh_payload) if refresh_payload else None
+    session_id = create_persisted_session(identity, refresh_token, refresh_payload, session_id=session_id) if refresh_payload else session_id
     audit_identity = {**identity, "session_id": session_id}
     write_audit(action="login_success", resource_type="auth", resource_id=identity["sub"], success=True, identity=audit_identity)
+    AUTH_LOGIN_SUCCESS.labels(tenant_id=identity.get("tenant_id") or DEFAULT_TENANT_ID, role=identity.get("role") or "viewer").inc()
     return jsonify({
         "token": access_token,
         "access_token": access_token,
@@ -3365,6 +4279,7 @@ def auth_token():
     })
 
 
+@app.post("/api/auth/refresh")
 @app.post("/auth/refresh")
 def auth_refresh():
     REQUEST_COUNTER.labels(endpoint="auth_refresh").inc()
@@ -3383,12 +4298,14 @@ def auth_refresh():
         return jsonify({"error": "invalid_refresh_token"}), 401
     access_ttl = ACCESS_TOKEN_EXPIRE_MINUTES * 60
     refresh_ttl = REFRESH_TOKEN_EXPIRE_MINUTES * 60
-    access_token = create_jwt(subject=identity["sub"], ttl_seconds=access_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="access")
-    refresh_token = create_jwt(subject=identity["sub"], ttl_seconds=refresh_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="refresh")
+    session_claim = identity.get("session_id") or decoded.get("session_id")
+    access_token = create_jwt(subject=identity["sub"], ttl_seconds=access_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="access", session_id=session_claim, user_id=identity.get("user_id"))
+    refresh_token = create_jwt(subject=identity["sub"], ttl_seconds=refresh_ttl, role=identity["role"], tenant_id=identity["tenant_id"], token_use="refresh", session_id=session_claim, user_id=identity.get("user_id"))
     new_refresh_payload = decode_jwt(refresh_token) or {}
     session_id = rotate_refresh_token_record(old_record, refresh_token, new_refresh_payload) if new_refresh_payload else identity.get("session_id")
     audit_identity = {**identity, "session_id": session_id or identity.get("session_id")}
     write_audit(action="refresh_token", resource_type="auth", resource_id=identity["sub"], success=True, identity=audit_identity)
+    AUTH_REFRESH_TOTAL.labels(tenant_id=identity.get("tenant_id") or DEFAULT_TENANT_ID).inc()
     return jsonify({
         "token": access_token,
         "access_token": access_token,
@@ -3401,12 +4318,78 @@ def auth_refresh():
     })
 
 
+@app.get("/api/auth/me")
 @app.get("/auth/me")
 @require_auth
 def auth_me():
     REQUEST_COUNTER.labels(endpoint="auth_me").inc()
     identity = current_identity()
     return jsonify({"user": public_identity(identity)})
+
+
+@app.post("/api/auth/logout")
+@app.post("/auth/logout")
+@require_auth
+def auth_logout():
+    identity = current_identity() or {}
+    payload = request.get_json(silent=True) or {}
+    session_id = payload.get("session_id") or identity.get("session_id")
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            if session_id:
+                cur.execute("UPDATE auth_sessions SET revoked_at = NOW(), last_seen_at = NOW() WHERE session_id = %s AND tenant_id = %s", (session_id, identity.get("tenant_id") or DEFAULT_TENANT_ID))
+                cur.execute(
+                    """
+                    UPDATE refresh_tokens
+                    SET revoked_at = NOW()
+                    WHERE session_id = %s AND tenant_id = %s AND revoked_at IS NULL
+                    """,
+                    (session_id, identity.get("tenant_id") or DEFAULT_TENANT_ID),
+                )
+        conn.commit()
+        write_audit(action="logout", resource_type="auth", resource_id=identity.get("sub"), success=True, identity=identity)
+        return jsonify({"status": "ok", "session_id": session_id})
+    finally:
+        conn.close()
+
+
+@app.post("/api/auth/change-password")
+@app.post("/auth/change-password")
+@require_auth
+def auth_change_password():
+    identity = current_identity() or {}
+    payload = request.get_json(silent=True) or {}
+    current_password = str(payload.get("current_password") or "")
+    new_password = str(payload.get("new_password") or "")
+    errors = password_policy_errors(new_password)
+    if errors:
+        return jsonify({"error": "password_policy_failed", "errors": errors}), 400
+    conn = ensure_connection()
+    try:
+        user = fetch_user_record(conn, identity.get("sub") or "")
+        if not user or not verify_password(current_password, user.get("password_hash")):
+            write_audit(action="password_change_failed", resource_type="user", resource_id=identity.get("sub"), success=False, identity=identity, metadata={"reason": "invalid_current_password"})
+            return jsonify({"error": "invalid_current_password"}), 401
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET password_hash = %s, updated_at = NOW(), failed_login_attempts = 0, locked_until = NULL
+                WHERE username = %s AND tenant_id = %s
+                """,
+                (hash_password(new_password), identity.get("sub"), identity.get("tenant_id") or DEFAULT_TENANT_ID),
+            )
+            if identity.get("session_id"):
+                cur.execute(
+                    "UPDATE refresh_tokens SET revoked_at = NOW() WHERE session_id = %s AND revoked_at IS NULL",
+                    (identity.get("session_id"),),
+                )
+        conn.commit()
+        write_audit(action="password_changed", resource_type="user", resource_id=identity.get("sub"), success=True, identity=identity)
+        return jsonify({"status": "ok", "message": "Senha alterada; faça login novamente"})
+    finally:
+        conn.close()
 
 
 @app.get("/alertas")
@@ -3426,6 +4409,60 @@ def alertas():
 def alerts_contract():
     REQUEST_COUNTER.labels(endpoint="alerts").inc()
     return alertas()
+
+
+@app.post("/ingest/alerts")
+@require_role("admin", "analyst")
+def ingest_alerts():
+    REQUEST_COUNTER.labels(endpoint="ingest_alerts").inc()
+    payload = request.get_json(silent=True) or {}
+    alerts = payload.get("alerts", payload if isinstance(payload, list) else [])
+    if isinstance(alerts, dict):
+        alerts = [alerts]
+    if not isinstance(alerts, list) or not alerts:
+        INGEST_REJECTED.labels(reason="empty_payload").inc()
+        return jsonify({"error": "invalid_payload", "message": "expected alerts list"}), 400
+    if len(alerts) > 100:
+        INGEST_REJECTED.labels(reason="batch_too_large").inc()
+        return jsonify({"error": "batch_too_large", "max_alerts": 100}), 413
+
+    identity = current_identity() or {"role": "admin", "tenant_id": DEFAULT_TENANT_ID}
+    conn = ensure_connection()
+    persisted = []
+    try:
+        for alert in alerts:
+            if not isinstance(alert, dict):
+                INGEST_REJECTED.labels(reason="invalid_item").inc()
+                continue
+            event_id = persist_ingested_alert(conn, alert, identity)
+            persisted.append(event_id)
+            INGESTED_ALERTS.labels(source=str(alert.get("detection_source") or "distributed")).inc()
+        recent_alerts = fetch_alert_rows(conn, limit=min(100, max(20, len(persisted) * 5))) if persisted and hasattr(conn, "cursor") else []
+        incidents = materialize_incidents(conn, recent_alerts) if persisted else []
+        maybe_cleanup_retention(conn)
+        conn.commit()
+        for alert in recent_alerts[: len(persisted) or 1]:
+            emit_realtime_event("security_event", enrich_alert(alert))
+        for incident in incidents[-3:]:
+            emit_realtime_event("incident_created", incident)
+            emit_realtime_event("timeline_update", {"incident_id": incident.get("incident_id"), "tenant_id": incident.get("tenant_id")})
+        emit_realtime_event("metrics_update", {"tenant_id": identity.get("tenant_id") or DEFAULT_TENANT_ID, "events_ingested": len(persisted), "incidents_updated": len(incidents)})
+        write_audit(
+            action="distributed_alert_ingest",
+            resource_type="alert",
+            resource_id="batch",
+            success=True,
+            identity=identity,
+            metadata={"count": len(persisted), "source": payload.get("source") or "distributed_pipeline"},
+        )
+        return jsonify({"status": "ok", "count": len(persisted), "event_ids": persisted, "incidents_updated": len(incidents)}), 202
+    except Exception as exc:
+        conn.rollback()
+        INGEST_REJECTED.labels(reason="persist_failed").inc()
+        log_json("ERROR", "Falha ao persistir alertas distribuidos", error=str(exc))
+        return jsonify({"error": "persist_failed", "message": str(exc) if SENTINELA_ENV != "production" else "failed to persist alerts"}), 500
+    finally:
+        conn.close()
 
 
 @app.patch("/alerts/<alert_id>/lifecycle")
@@ -3665,7 +4702,25 @@ def audit_logs():
         conn.close()
 
 
-if sock:
+if socketio:
+    @socketio.on("connect")
+    def socketio_connect(auth=None):
+        token = ((auth or {}).get("token") if isinstance(auth, dict) else None) or request.args.get("token")
+        payload = decode_jwt(token) if token else None
+        if ENABLE_AUTH and not (payload and payload.get("token_use") == "access"):
+            return False
+        WEBSOCKET_CONNECTIONS.inc()
+        emit("metrics_update", {"status": "connected", "tenant_id": (payload or {}).get("tenant_id") or DEFAULT_TENANT_ID})
+
+    @socketio.on("disconnect")
+    def socketio_disconnect():
+        try:
+            WEBSOCKET_CONNECTIONS.dec()
+        except Exception:
+            pass
+
+
+if sock and not socketio:
     @sock.route("/ws/alerts")
     def ws_alerts(ws):
         last_seen_id = None
@@ -3673,7 +4728,10 @@ if sock:
         payload = decode_jwt(token) if token else None
         identity = (
             {"sub": payload.get("sub"), "role": payload.get("role", "viewer"), "tenant_id": payload.get("tenant_id") or DEFAULT_TENANT_ID}
-            if payload and payload.get("token_use") == "access" else current_identity()
+            if payload and payload.get("token_use") == "access" else (
+                {"sub": "legacy-token", "role": "admin", "tenant_id": request.args.get("tenant_id") or DEFAULT_TENANT_ID}
+                if token and hmac.compare_digest(token, API_TOKEN) else current_identity()
+            )
         )
         if not identity:
             ws.send(json.dumps({"type": "error", "error": "unauthorized"}))
@@ -3739,6 +4797,7 @@ def investigate_ip(source_ip):
         conn.close()
 
 
+@app.get("/api/incidents")
 @app.get("/incidents")
 @require_auth
 def incidents():
@@ -3749,11 +4808,12 @@ def incidents():
         alerts = fetch_alert_rows(conn, limit=500)
         materialize_incidents(conn, alerts)
         data = fetch_persisted_incidents(conn, limit=limit, offset=offset)
-        return jsonify({"count": len(data), "total": count_persisted_incidents(conn), "limit": limit, "offset": offset, "data": data})
+        return jsonify({"count": len(data), "total": count_persisted_incidents(conn), "limit": limit, "offset": offset, "data": data, "incidents": data})
     finally:
         conn.close()
 
 
+@app.get("/api/incidents/<incident_id>")
 @app.get("/incidents/<incident_id>")
 @require_auth
 def incident_detail(incident_id):
@@ -3774,6 +4834,239 @@ def incident_detail(incident_id):
         if not incident:
             return jsonify({"error": "not_found", "incident_id": incident_id}), 404
         return jsonify(incident)
+    finally:
+        conn.close()
+
+
+@app.get("/api/hunting/search")
+@app.get("/hunting/search")
+@require_auth
+def hunting_search():
+    REQUEST_COUNTER.labels(endpoint="hunting_search").inc()
+    limit, offset = pagination_params(default_limit=50, max_limit=200)
+    filters = {
+        "q": sanitize_filter(request.args.get("q"), 160),
+        "severity": sanitize_filter(request.args.get("severity"), 20).upper(),
+        "mitre": sanitize_filter(request.args.get("mitre"), 40).upper(),
+        "host": sanitize_filter(request.args.get("host"), 120),
+        "username": sanitize_filter(request.args.get("username"), 120),
+        "ip": sanitize_filter(request.args.get("ip"), 80),
+        "technique": sanitize_filter(request.args.get("technique"), 40).upper(),
+        "start": request.args.get("start"),
+        "end": request.args.get("end"),
+        "sort": sanitize_filter(request.args.get("sort") or "ts_desc", 20),
+    }
+    clauses = ["tenant_id = %s"]
+    params = [tenant_id()]
+    if filters["q"]:
+        like = f"%{filters['q']}%"
+        clauses.append("(COALESCE(status,'') ILIKE %s OR COALESCE(human_summary,'') ILIKE %s OR COALESCE(raw_event::text,'') ILIKE %s)")
+        params.extend([like, like, like])
+    if filters["severity"] and filters["severity"] != "ALL":
+        clauses.append("UPPER(COALESCE(severity,'')) = %s")
+        params.append(filters["severity"])
+    if filters["mitre"] or filters["technique"]:
+        clauses.append("UPPER(COALESCE(mitre_id,'')) = %s")
+        params.append(filters["mitre"] or filters["technique"])
+    if filters["host"]:
+        clauses.append("(COALESCE(target_host,'') ILIKE %s OR COALESCE(raw_event->>'host','') ILIKE %s)")
+        params.extend([f"%{filters['host']}%", f"%{filters['host']}%"])
+    if filters["username"]:
+        clauses.append("COALESCE(target_user,'') ILIKE %s")
+        params.append(f"%{filters['username']}%")
+    if filters["ip"]:
+        clauses.append("(COALESCE(source_ip, ip) = %s OR COALESCE(target_ip,'') = %s)")
+        params.extend([filters["ip"], filters["ip"]])
+    if filters["start"]:
+        clauses.append("ts >= %s::timestamptz")
+        params.append(filters["start"])
+    if filters["end"]:
+        clauses.append("ts <= %s::timestamptz")
+        params.append(filters["end"])
+    order = "risk DESC, ts DESC" if filters["sort"] == "risk_desc" else "ts DESC"
+    params.extend([limit, offset])
+    conn = ensure_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT *, COALESCE(threat_score, score_final, risco, 0) AS risk
+                FROM alertas
+                WHERE {' AND '.join(clauses)}
+                ORDER BY {order}
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params),
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        data = [enrich_alert(row_to_dict(row, columns)) for row in rows]
+        return jsonify({"count": len(data), "limit": limit, "offset": offset, "filters": filters, "data": data})
+    finally:
+        conn.close()
+
+
+@app.get("/api/ioc/lookup")
+@app.get("/ioc/lookup")
+@require_auth
+def ioc_lookup():
+    value = sanitize_filter(request.args.get("value"), 160)
+    ioc_type = sanitize_filter(request.args.get("type") or "auto", 30)
+    started = time.time()
+    if not value:
+        return jsonify({"error": "value_required"}), 400
+    conn = ensure_connection()
+    try:
+        like = f"%{value}%"
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM alertas
+                WHERE tenant_id = %s
+                  AND (
+                    COALESCE(source_ip, ip) = %s OR COALESCE(target_ip, '') = %s
+                    OR COALESCE(target_host, '') ILIKE %s
+                    OR COALESCE(target_user, '') ILIKE %s
+                    OR COALESCE(raw_event::text, '') ILIKE %s
+                  )
+                ORDER BY ts DESC
+                LIMIT 200
+                """,
+                (tenant_id(), value, value, like, like, like),
+            )
+            rows = cur.fetchall() or []
+            columns = [desc[0] for desc in getattr(cur, "description", None) or []]
+        alerts = [enrich_alert(row_to_dict(row, columns)) for row in rows]
+        IOC_LOOKUP_LATENCY.labels(ioc_type=ioc_type).observe(time.time() - started)
+        return jsonify({
+            "ioc": value,
+            "type": ioc_type,
+            "alert_count": len(alerts),
+            "affected_hosts": sorted({item.get("target_host") for item in alerts if item.get("target_host")}),
+            "max_severity": max((item.get("severity") or "LOW" for item in alerts), default="LOW", key=lambda s: SEVERITY_ORDER.get(str(s).upper(), 0)),
+            "accumulated_score": min(100, sum(alert_score(item) for item in alerts) // max(1, len(alerts))) if alerts else 0,
+            "timeline": build_enterprise_timeline(f"ioc:{value}", alerts[:50])["timeline"],
+            "related_alerts": alerts[:50],
+        })
+    finally:
+        conn.close()
+
+
+@app.get("/api/correlation")
+@app.get("/correlation")
+@require_auth
+def correlation_view():
+    REQUEST_COUNTER.labels(endpoint="correlation").inc()
+    limit, _offset = pagination_params(default_limit=300, max_limit=1000)
+    conn = ensure_connection()
+    try:
+        alerts = fetch_alert_rows(conn, limit=limit)
+        return jsonify(build_light_correlation(alerts))
+    finally:
+        conn.close()
+
+
+def replay_filter_alert(alert, filters):
+    ts = datetime_from_value(alert.get("ts") or alert.get("timestamp"))
+    if filters.get("start") and ts < datetime_from_value(filters["start"]):
+        return False
+    if filters.get("end") and ts > datetime_from_value(filters["end"]):
+        return False
+    if filters.get("host") and filters["host"] not in {alert.get("target_host"), alert.get("host")}:
+        return False
+    if filters.get("source_ip") and filters["source_ip"] != (alert.get("source_ip") or alert.get("ip")):
+        return False
+    if filters.get("username") and filters["username"] != (alert.get("target_user") or alert.get("username")):
+        return False
+    return True
+
+
+@app.post("/api/replay/start")
+@app.post("/replay/start")
+@require_role("admin", "operator")
+def replay_start():
+    REQUEST_COUNTER.labels(endpoint="replay_start").inc()
+    payload = request.get_json(silent=True) or {}
+    filters = {key: sanitize_filter(payload.get(key), 160) for key in ("start", "end", "host", "source_ip", "username", "incident_id")}
+    replay_id = "RPL-" + uuid.uuid4().hex[:12].upper()
+    conn = ensure_connection()
+    try:
+        if filters.get("incident_id"):
+            alerts = fetch_incident_alerts(conn, filters["incident_id"], limit=1000, offset=0)
+        else:
+            alerts = fetch_alert_rows(conn, limit=1000)
+        selected = [{**alert, "replay_id": replay_id, "is_replay_event": True} for alert in alerts if replay_filter_alert(alert, filters)]
+        REPLAY_JOBS[replay_id] = {
+            "replay_id": replay_id,
+            "status": "completed",
+            "queued": len(selected),
+            "processed": len(selected),
+            "filters": filters,
+            "started_at": now_iso(),
+            "completed_at": now_iso(),
+        }
+        REPLAY_QUEUE_SIZE.set(0)
+        REPLAY_THROUGHPUT.labels(mode="historical").inc(len(selected))
+        write_audit(action="replay_started", resource_type="replay", resource_id=replay_id, success=True, metadata={"count": len(selected), "filters": filters})
+        return jsonify({**REPLAY_JOBS[replay_id], "timeline": build_enterprise_timeline(replay_id, selected[:200])["timeline"]})
+    finally:
+        conn.close()
+
+
+@app.post("/api/replay/rules")
+@app.post("/replay/rules")
+@require_role("admin", "operator")
+def replay_rules():
+    payload = request.get_json(silent=True) or {}
+    result = replay_start()
+    REPLAY_THROUGHPUT.labels(mode="rules").inc(0)
+    return result
+
+
+@app.get("/api/replay/status")
+@app.get("/replay/status")
+@require_auth
+def replay_status():
+    replay_id = sanitize_filter(request.args.get("replay_id"), 80)
+    if replay_id:
+        return jsonify(REPLAY_JOBS.get(replay_id, {"replay_id": replay_id, "status": "not_found"}))
+    return jsonify({"count": len(REPLAY_JOBS), "queue_size": 0, "jobs": list(REPLAY_JOBS.values())[-20:]})
+
+
+@app.get("/api/retention/policy")
+@app.get("/retention/policy")
+@require_auth
+def retention_policy():
+    days = int(os.getenv("SENTINELA_RETENTION_DAYS", "30"))
+    archive = int(os.getenv("SENTINELA_ARCHIVE_AFTER_DAYS", "14"))
+    now = datetime.now(timezone.utc)
+    return jsonify({
+        "raw_events_retention_days": days,
+        "normalized_events_retention_days": max(days, 60),
+        "alerts_retention_days": max(days, 180),
+        "incident_timelines_retention_days": max(days, 365),
+        "delete_before": (now.timestamp() - days * 86400),
+        "archive_after_days": archive,
+        "compact_after_days": max(1, archive // 2),
+    })
+
+
+@app.get("/api/incidents/<incident_id>/timeline")
+@app.get("/incidents/<incident_id>/timeline")
+@require_auth
+def incident_timeline_product(incident_id):
+    REQUEST_COUNTER.labels(endpoint="incident_timeline_product").inc()
+    conn = ensure_connection()
+    try:
+        if not fetch_incident_by_id(conn, incident_id):
+            materialize_incidents(conn, fetch_alert_rows(conn, limit=500))
+        alerts = fetch_incident_alerts(conn, incident_id, limit=500, offset=0)
+        if not alerts:
+            incident = fetch_incident_by_id(conn, incident_id)
+            source = (incident or {}).get("primary_source_ip")
+            alerts = fetch_alert_rows(conn, source_ip=source, limit=500) if source else fetch_alert_rows(conn, limit=250)
+        return jsonify(build_enterprise_timeline(incident_id, alerts))
     finally:
         conn.close()
 
@@ -4094,121 +5387,126 @@ def incident_report_pdf(incident_id):
         conn.close()
 
 
+@app.post("/api/events/raw")
+@app.post("/ingest/events")
+@require_auth
+def ingest_raw_events():
+    REQUEST_COUNTER.labels(endpoint="ingest_events").inc()
+    payload = request.get_json(silent=True) or {}
+    events = payload.get("events", payload if isinstance(payload, list) else [])
+    if isinstance(events, dict):
+        events = [events]
+    if not isinstance(events, list) or not events:
+        return jsonify({"error": "invalid_payload", "message": "expected events list"}), 400
+
+    identity = current_identity() or {"role": "admin", "tenant_id": DEFAULT_TENANT_ID}
+    rules_config = read_rules_config()
+    active_rules = [r for r in rules_config.get("rules", []) if r.get("enabled")]
+    
+    conn = ensure_connection()
+    persisted_events = []
+    generated_alerts = []
+    
+    try:
+        with conn.cursor() as cur:
+            for event in events:
+                event_type = normalize_event_type(event.get("event_type", "UNKNOWN"))
+                source_ip = event.get("source_ip", event.get("ip", "0.0.0.0"))
+                
+                cur.execute(
+                    """
+                    INSERT INTO raw_events (tenant_id, source_ip, event_type, payload)
+                    VALUES (%s, %s, %s, %s::jsonb)
+                    RETURNING id
+                    """,
+                    (identity.get("tenant_id", DEFAULT_TENANT_ID), source_ip, event_type, json.dumps(event))
+                )
+                persisted_events.append(cur.fetchone()[0])
+                
+                # Regras de avaliação in-process
+                for rule in active_rules:
+                    if rule.get("event_type") == event_type or not rule.get("event_type"):
+                        # Basic condition matching
+                        conditions = rule.get("studio", {}).get("conditions", {}) if isinstance(rule.get("studio"), dict) else {}
+                        matched = True
+                        for key, expected in conditions.items():
+                            if expected and str(event.get(key, "")).upper() != str(expected).upper():
+                                matched = False
+                                break
+                        
+                        if matched:
+                            alert = {
+                                "id": str(uuid.uuid4()),
+                                "event_id": str(uuid.uuid4()),
+                                "tenant_id": identity.get("tenant_id", DEFAULT_TENANT_ID),
+                                "ip": source_ip,
+                                "source_ip": source_ip,
+                                "event_type": event_type,
+                                "status": "DETECTED",
+                                "risco": rule.get("score", 0),
+                                "score_final": rule.get("score", 0),
+                                "threat_score": rule.get("score", 0),
+                                "severity": rule.get("severity", "LOW"),
+                                "mitre_id": rule.get("mitre_id"),
+                                "mitre_name": rule.get("mitre_name"),
+                                "mitre_tactic": rule.get("mitre_tactic"),
+                                "human_summary": f"Regra {rule.get('name')} disparada pelo evento {event_type} de {source_ip}.",
+                                "raw_event": event,
+                                "internal_rule_id": rule.get("name"),
+                                "internal_rule_name": rule.get("name"),
+                                "detection_source": "in_process_engine",
+                                "is_demo": event.get("is_demo", False),
+                                "simulated_block": rule.get("action") == "simulated_block",
+                            }
+                            generated_alerts.append(alert)
+        conn.commit()
+        
+        # Persist the alerts generated by rules
+        if generated_alerts:
+            for alert in generated_alerts:
+                persist_ingested_alert(conn, alert, identity)
+            materialize_incidents(conn, generated_alerts)
+            conn.commit()
+            
+            # Emit websocket events
+            for alert in generated_alerts:
+                emit_realtime_event("security_event", enrich_alert(alert))
+            
+        return jsonify({
+            "status": "ok", 
+            "events_ingested": len(persisted_events), 
+            "alerts_generated": len(generated_alerts)
+        }), 202
+    except Exception as exc:
+        conn.rollback()
+        log_json("ERROR", "Falha na ingestao de raw events", error=str(exc))
+        return jsonify({"error": "ingest_failed", "message": str(exc)}), 500
+    finally:
+        conn.close()
+
 @app.post("/demo/simulate-attack")
 @require_role("admin", "analyst")
 def simulate_attack():
     REQUEST_COUNTER.labels(endpoint="demo_simulate_attack").inc()
     DEMO_COUNTER.inc()
-    conn = ensure_connection()
-    try:
-        alerts = build_demo_alerts()
-        persist_demo_alerts(conn, alerts)
-        payload_alerts = []
-        timeline = []
-        primary = {
-            "ip": alerts[0]["ip"],
-            "initial_vector": alerts[0]["event_type"],
-            "max_severity": "CRITICAL",
-            "soc_action": "simulated_block only",
-        }
-
-        for index, alert in enumerate(alerts):
-            item = {
-                "id": alert["id"],
-                "ip": alert["ip"],
-                "event_type": alert["event_type"],
-                "port": alert["port"],
-                "service": alert["service"],
-                "risk": alert["risco"],
-                "risco": alert["risco"],
-                "status": alert["status"],
-                "severity": alert["severity"],
-                "mitre_id": alert["mitre_id"],
-                "mitre_name": alert["mitre_name"],
-                "mitre_tactic": alert["mitre_tactic"],
-                "human_summary": alert["human_summary"],
-                "explanation": alert["explanation"],
-                "timestamp": alert["timestamp"],
-                "ts": alert["ts"],
-                "description": alert["description"],
-                "stage": alert["stage"],
-                "simulated_block": alert["simulated_block"],
-                "threat_intel_match": alert["threat_intel_match"],
-                "threat_category": alert["threat_category"],
-                "threat_description": alert["threat_description"],
-                "threat_source": alert["threat_source"],
-                "occurrence_count": alert["occurrence_count"],
-                "first_seen": alert["first_seen"],
-                "last_seen": alert["last_seen"],
-                "aggregated": alert["aggregated"],
-                "ports": alert["ports"],
-                "services": alert["services"],
-                "event_types": alert["event_types"],
-                "action_soc": alert["action_soc"],
-                "mitre_techniques": alert.get("mitre_techniques", []),
-                "internal_rule_id": alert.get("internal_rule_id"),
-                "internal_rule_name": alert.get("internal_rule_name"),
-                "correlation_rule": alert.get("correlation_rule"),
-                "response_playbook": alert.get("response_playbook"),
-                "detection_source": alert.get("detection_source"),
-                "alert_type": alert.get("alert_type"),
-                "score_breakdown": alert.get("score_breakdown"),
-                "score_explanation": alert.get("score_explanation"),
-                "target_host": alert.get("target_host"),
-                "target_ip": alert.get("target_ip"),
-                "target_user": alert.get("target_user"),
-                "target_service": alert.get("target_service"),
-                "target_port": alert.get("target_port"),
-                "target_container": alert.get("target_container"),
-                "target_application": alert.get("target_application"),
-                "environment": alert.get("environment"),
-                "asset_owner": alert.get("asset_owner"),
-                "asset_criticality": alert.get("asset_criticality"),
-                "business_impact": alert.get("business_impact"),
-                "recommended_action": alert.get("recommended_action"),
-                "action_reason": alert.get("action_reason"),
-                "execution_mode": alert.get("execution_mode"),
-                "execution_status": alert.get("execution_status"),
-                "execution_notes": alert.get("execution_notes"),
-                "is_demo": True,
-            }
-            payload_alerts.append(item)
-            timeline.append(
-                {
-                    "timestamp": item["timestamp"],
-                    "ip": item["ip"],
-                    "event_type": item["event_type"],
-                    "severity": item["severity"],
-                    "score": item["risk"],
-                    "description": item["description"],
-                    "stage": item["stage"],
-                    "mitre_id": item["mitre_id"],
-                    "mitre_name": item["mitre_name"],
-                    "mitre_tactic": item["mitre_tactic"],
-                    "replay_id": alert.get("replay_id"),
-                    "simulated_block": item["simulated_block"],
-                }
-            )
-
-        response = {
-            "events_created": len(payload_alerts),
-            "simulated_block": True,
-            "real_blocking": False,
-            "primary_attacker": primary,
-            "incident_summary": summarize_incident(payload_alerts),
-            "timeline": timeline,
-            "alerts": payload_alerts,
-        }
-        write_audit(
-            action="demo_ingestion_executed",
-            resource_type="demo",
-            resource_id="simulate-attack",
-            success=True,
-            metadata={"events_created": len(payload_alerts), "primary_ip": primary["ip"]},
-        )
-        return jsonify(response), 201
-    finally:
-        conn.close()
+    
+    # Generate RAW events instead of pre-baked alerts
+    attacker_ip = "45.67.89.12"
+    raw_events = [
+        {"event_type": "PORT_SCAN", "ip": attacker_ip, "port": 22, "service": "ssh", "is_demo": True},
+        {"event_type": "PORT_SCAN", "ip": attacker_ip, "port": 22, "service": "ssh", "is_demo": True},
+        {"event_type": "FAILED_LOGIN", "ip": attacker_ip, "username": "admin", "port": 22, "is_demo": True},
+        {"event_type": "BRUTE_FORCE", "ip": attacker_ip, "username": "admin", "port": 22, "is_demo": True},
+        {"event_type": "IOC_MATCH", "ip": attacker_ip, "threat_category": "MALWARE_C2", "is_demo": True},
+        {"event_type": "ESCALATION", "ip": attacker_ip, "target_user": "root", "is_demo": True},
+        {"event_type": "RESPONSE", "ip": attacker_ip, "action": "simulated_block", "is_demo": True},
+    ]
+    
+    # Push them through the real in-process engine
+    with app.test_request_context(json={"events": raw_events}):
+        response, status_code = ingest_raw_events()
+        
+    return response, status_code
 
 
 @app.route("/response/actions/<action_id>/approve", methods=["POST"])
@@ -4260,7 +5558,7 @@ def reject_response_action(action_id):
                 return jsonify({"error": "action_not_found_or_not_pending"}), 404
             
             conn.commit()
-            return jsonify({"status": "success", "message": "Action rejected"})
+            return jsonify({"status": "success", "message": "Ação rejeitada"})
     finally:
         if conn:
             conn.close()
@@ -4578,7 +5876,10 @@ def copilot_summarize():
 
 def main():
     bootstrap_database()
-    app.run(host="0.0.0.0", port=5000)
+    if socketio:
+        socketio.run(app, host="0.0.0.0", port=5000)
+    else:
+        app.run(host="0.0.0.0", port=5000)
 
 
 if __name__ == "__main__":

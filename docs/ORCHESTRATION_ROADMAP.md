@@ -35,3 +35,14 @@ The local and Oracle micro deployments remain the low-cost operational baseline.
 5. Run load tests against `/ready`, `/alertas`, `/ws/alerts` and the Kafka event path.
 
 For Oracle Free Tier experiments, deploy `infra/k8s/overlays/oracle-k3s` instead of `prod`.
+
+## Oracle Distributed Rollout
+
+For the live Oracle environment, keep the current AMD micro as the stable core and add capabilities as separate nodes:
+
+1. Micro core: dashboard web, dashboard API, Postgres and Redis only.
+2. Event bus node: NATS JetStream on `SENTINELA-EVENTBUS-A1` when A1 capacity is available.
+3. Threat hunting node: OpenSearch after the event bus is stable.
+4. Graph node: Neo4j only after search and retention are under control.
+
+The operational runbook for this path is `docs/DISTRIBUTED_ORACLE_ROLLOUT.md`.

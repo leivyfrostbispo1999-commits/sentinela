@@ -1,0 +1,8 @@
+{
+  "raw_events_retention_days": 30,
+  "normalized_events_retention_days": 60,
+  "alerts_retention_days": 180,
+  "incident_timelines_retention_days": 365,
+  "archive_after_days": 14,
+  "compact_after_days": 7
+}

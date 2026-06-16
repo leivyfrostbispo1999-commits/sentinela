@@ -1,0 +1,21 @@
+id: multiple_failed_logins
+name: Multiplos failed logins
+description: Falhas repetidas de autenticacao para o mesmo usuario.
+severity: MEDIUM
+score: 65
+event_type: FAILED_LOGIN
+condition:
+  event_type:
+    - FAILED_LOGIN
+    - AUTH_FAILED
+group_by: username
+window_seconds: 600
+threshold: 4
+mitre:
+  tactic: Credential Access
+  technique: T1110
+  technique_name: Brute Force
+tags:
+  - authentication
+  - failed_login
+

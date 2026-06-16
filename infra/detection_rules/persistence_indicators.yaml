@@ -1,0 +1,19 @@
+id: persistence_indicators
+name: Persistence indicator
+description: Alteracao potencialmente persistente em cron, systemd, shell profile ou authorized_keys.
+severity: HIGH
+score: 82
+event_type: PERSISTENCE
+condition:
+  event_type: PERSISTENCE_INDICATOR
+group_by: host
+window_seconds: 600
+threshold: 1
+mitre:
+  tactic: Persistence
+  technique: T1053
+  technique_name: Scheduled Task/Job
+tags:
+  - persistence
+  - hardening
+

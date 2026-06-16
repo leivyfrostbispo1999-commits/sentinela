@@ -1,4 +1,13 @@
-Always respond in Brazilian Portuguese, regardless of the input language or code.
+### Diretrizes de Idioma e Localização (pt-BR)
+Toda a interface, documentação e mensagens operacionais do SENTINELA devem ser prioritariamente em português brasileiro (pt-BR).
+
+**Padrões de Tradução:**
+- **Interface e UX:** Títulos, descrições, botões, alertas e dashboards devem ser em pt-BR.
+- **Relatórios e Logs:** Mensagens de erro, logs visuais e relatórios devem soar como um produto SaaS enterprise brasileiro.
+- **Termos Técnicos Preservados:** Mantenha em inglês apenas termos consolidados (SOC, XDR, SIEM, MITRE ATT&CK, Playbook, Threat Intel, IOC, Brute Force, Port Scan, Docker, Kubernetes, API, Tenant, Score, Cluster, Deploy, Health Check, Webhook, Endpoint, Machine Learning, AI, Log, Cache, Pipeline, Firewall, Zero Trust, Token, JWT).
+- **Evite Misturas:** Não utilize frases híbridas (inglês/português) desnecessariamente.
+- **Naturalidade:** Prefira equivalentes naturais (Ex: "Inteligência de Caminho de Ataque" em vez de "Attack Path Intelligence").
+- **Comentários de Código:** Podem permanecer em inglês.
 
 ### Protocolo de Coordenação entre Agentes
 Antes de editar qualquer arquivo:

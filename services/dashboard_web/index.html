@@ -3,2450 +3,450 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SENTINELA 7.0</title>
+    <title>SENTINELA SOC</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
-        :root {
-            --bg: #05080f;
-            --panel: #0d1422;
-            --panel-2: #111c2c;
-            --border: rgba(113, 211, 255, 0.18);
-            --text: #e7f1ff;
-            --muted: #8fa5ba;
-            --cyan: #65e7ff;
-            --green: #22e68b;
-            --yellow: #ffd166;
-            --orange: #ff9f43;
-            --red: #ff405d;
-        }
 
-        * { box-sizing: border-box; }
+    /* ZERO ALTURA FANTASMA - FIX DEFINITIVO */
+    .dashboard-masonry {
+        column-count: 2;
+        column-gap: 16px;
+        padding: 16px;
+        display: block !important;
+        width: 100%;
+        box-sizing: border-box;
+    }
 
-        body {
-            margin: 0;
-            min-height: 100vh;
-            color: var(--text);
-            font-family: Inter, "Segoe UI", Arial, sans-serif;
-            background:
-                linear-gradient(rgba(101, 231, 255, 0.035) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(101, 231, 255, 0.03) 1px, transparent 1px),
-                #05080f;
-            background-size: 42px 42px;
-        }
+    @media (max-width: 1400px) {
+        .dashboard-masonry { column-count: 1; }
+    }
 
-        .shell { width: min(1600px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 32px; }
+    .widget-card {
+        display: inline-block;
+        vertical-align: top;
+        width: 100%;
+        margin: 0 0 16px;
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        page-break-inside: avoid;
 
-        header, .panel, .card {
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            background: rgba(13, 20, 34, 0.92);
-            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
-        }
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        flex: unset !important;
+        grid-row: unset !important;
+        align-self: start !important;
+        
+        border: 1px solid var(--border-subtle);
+        border-radius: 2px;
+        background: var(--surface-primary);
+        contain: layout paint;
+    }
 
-        header {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 18px;
-            align-items: center;
-            padding: 20px;
-            background: linear-gradient(135deg, rgba(101, 231, 255, 0.08), rgba(13, 20, 34, 0.94));
-        }
+    
+    /* ZERO ALTURA FANTASMA - FIX RESIDUAL */
+    .attack-chain-panel,
+    .replay-panel,
+    #attackChainWrapper,
+    #replayPanel,
+    #attack-chain,
+    #replay-retention,
+    #incidentPanel,
+    #iocPanel {
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
 
-        h1, h2, h3, p { margin: 0; }
+        flex: unset !important;
+        flex-grow: 0 !important;
 
-        h1 { color: #f8fbff; font-size: clamp(2rem, 4vw, 4.7rem); line-height: 0.95; letter-spacing: 0; }
-        .subtitle, .muted { color: var(--muted); margin-top: 6px; }
+        display: inline-block !important;
+        width: 100% !important;
+    }
 
-        .toolbar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            justify-content: flex-end;
-            align-items: center;
-        }
-        .toolbar .select { flex: 1 1 160px; min-width: 150px; }
 
-        .select, .button {
-            min-height: 38px;
-            border: 1px solid rgba(101, 231, 255, 0.35);
-            border-radius: 7px;
-            background: #07111f;
-            color: var(--text);
-            font-weight: 800;
-        }
+    .feed-container, .timeline-container, .rank-list {
+        max-height: 500px;
+        overflow-y: auto;
+        height: auto !important;
+        min-height: 0 !important;
+    }
 
-        .select {
-            width: auto;
-            max-width: 100%;
-            padding: 0 34px 0 10px;
-            color-scheme: dark;
-            accent-color: var(--cyan);
-            appearance: auto;
-            box-shadow: inset 0 0 0 1px rgba(101, 231, 255, 0.04), 0 0 18px rgba(101, 231, 255, 0.04);
-        }
-        .select:hover,
-        .select:focus-visible,
-        .search:hover,
-        .search:focus-visible,
-        .login-input:hover,
-        .login-input:focus-visible,
-        .incident-form input:hover,
-        .incident-form input:focus-visible,
-        .incident-form textarea:hover,
-        .incident-form textarea:focus-visible {
-            border-color: rgba(101, 231, 255, 0.72);
-            outline: 2px solid rgba(101, 231, 255, 0.28);
-            outline-offset: 2px;
-            background: #0b1726;
-        }
-        .select option,
-        .select optgroup {
-            background-color: #07111f;
-            color: #e7f1ff;
-            font-weight: 800;
-        }
-        .select option:checked {
-            background-color: #0f1f33;
-            color: #65e7ff;
-        }
-        .select option:hover {
-            background-color: #0b1726;
-            color: #ffffff;
-        }
-        .select:disabled,
-        .search:disabled,
-        .login-input:disabled {
-            opacity: 0.62;
-            cursor: not-allowed;
-        }
-        .search {
-            width: min(360px, 100%);
-            min-height: 38px;
-            border: 1px solid rgba(101, 231, 255, 0.35);
-            border-radius: 7px;
-            background: #07111f;
-            color: var(--text);
-            padding: 0 12px;
-            font-weight: 700;
-        }
-        .search::placeholder,
-        .login-input::placeholder,
-        .incident-form input::placeholder,
-        .incident-form textarea::placeholder {
-            color: #7faac1;
-            opacity: 1;
-        }
-        ::selection {
-            background: rgba(101, 231, 255, 0.26);
-            color: #ffffff;
-        }
-        * {
-            scrollbar-color: rgba(101, 231, 255, 0.48) #07111f;
-            scrollbar-width: thin;
-        }
-        *::-webkit-scrollbar { width: 10px; height: 10px; }
-        *::-webkit-scrollbar-track { background: #07111f; }
-        *::-webkit-scrollbar-thumb {
-            background: rgba(101, 231, 255, 0.42);
-            border: 2px solid #07111f;
-            border-radius: 999px;
-        }
-        *::-webkit-scrollbar-thumb:hover { background: rgba(101, 231, 255, 0.68); }
-        .button { padding: 0 14px; cursor: pointer; color: var(--cyan); }
-        .mode-toggle {
-            display: inline-grid;
-            grid-template-columns: 1fr 1fr;
-            min-height: 38px;
-            border: 1px solid rgba(101, 231, 255, 0.35);
-            border-radius: 7px;
-            overflow: hidden;
-            background: rgba(101, 231, 255, 0.06);
-        }
-        .mode-button {
-            border: 0;
-            padding: 0 12px;
-            background: transparent;
-            color: var(--muted);
-            font-weight: 900;
-            cursor: pointer;
-        }
-        .mode-button.active {
-            background: rgba(101, 231, 255, 0.16);
-            color: var(--cyan);
-        }
-        .button.demo {
-            border-color: rgba(255, 64, 93, 0.62);
-            background: rgba(255, 64, 93, 0.16);
-            color: #ff8da0;
-            box-shadow: 0 0 18px rgba(255, 64, 93, 0.12);
-        }
-        .button.demo:disabled {
-            cursor: wait;
-            opacity: 0.72;
-        }
-        .login-bar {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(110px, 1fr)) auto;
-            gap: 8px;
-            margin-bottom: 10px;
-        }
-        .login-input {
-            min-height: 36px;
-            min-width: 0;
-            border: 1px solid rgba(101, 231, 255, 0.28);
-            border-radius: 7px;
-            background: #07111f;
-            color: var(--text);
-            padding: 0 10px;
-            font-weight: 700;
-        }
-        .session-line {
-            display: flex;
-            justify-content: flex-end;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 8px;
-            color: var(--muted);
-            font-family: Consolas, monospace;
-            font-size: 0.74rem;
-        }
-        .session-line strong { color: var(--cyan); }
-        .session-line .offline { color: var(--orange); }
-        .session-line .online { color: var(--green); }
-        .session-line .degraded { color: var(--yellow); }
-        .session-line .critical { color: var(--red); }
-        .status-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            min-height: 24px;
-            padding: 3px 8px;
-            border: 1px solid currentColor;
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.035);
-            white-space: nowrap;
-        }
-        .status-pill::before {
-            content: "";
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: currentColor;
-            box-shadow: 0 0 8px currentColor;
-        }
-
-        .header-status { min-width: 260px; text-align: right; }
-        .level { font-family: Consolas, monospace; font-size: 1.55rem; font-weight: 900; }
-        .level.low { color: var(--green); }
-        .level.medium { color: var(--yellow); }
-        .level.high { color: var(--orange); }
-        .level.critical { color: var(--red); }
-
-        .critical-banner {
-            display: none;
-            margin-top: 16px;
-            padding: 14px 18px;
-            border: 1px solid rgba(255, 64, 93, 0.45);
-            border-radius: 8px;
-            background: rgba(255, 64, 93, 0.13);
-            color: var(--red);
-            font-weight: 900;
-            text-align: center;
-            box-shadow: 0 0 28px rgba(255, 64, 93, 0.12);
-        }
-        .critical-banner.show { display: block; }
-
-        .cards { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 16px; margin: 18px 0; }
-        .card { padding: 18px; min-height: 116px; }
-        .card-label { color: var(--muted); font-size: 0.76rem; font-weight: 900; text-transform: uppercase; }
-        .card-value { margin-top: 12px; color: var(--cyan); font-family: Consolas, monospace; font-size: 2.45rem; font-weight: 900; }
-        .card.pulse {
-            border-color: rgba(255, 64, 93, 0.45);
-            animation: cardPulse 1.2s ease-out 2;
-        }
-        .ops-strip {
-            display: grid;
-            grid-template-columns: repeat(5, minmax(140px, 1fr));
-            gap: 12px;
-            margin: 0 0 18px;
-        }
-        .ops-item {
-            display: grid;
-            gap: 7px;
-            min-height: 78px;
-            padding: 13px 14px;
-            border: 1px solid rgba(101, 231, 255, 0.13);
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.032);
-            font-family: Consolas, monospace;
-        }
-        .ops-label {
-            color: var(--muted);
-            font-size: 0.68rem;
-            font-weight: 900;
-            text-transform: uppercase;
-        }
-        .ops-value {
-            color: var(--cyan);
-            font-size: 0.92rem;
-            font-weight: 900;
-            overflow-wrap: anywhere;
-        }
-        .ops-item.ok .ops-value { color: var(--green); }
-        .ops-item.warn .ops-value { color: var(--yellow); }
-        .ops-item.fail .ops-value { color: var(--red); }
-
-        .incident-panel {
-            display: none;
-            margin-bottom: 16px;
-            border-color: rgba(255, 64, 93, 0.34);
-        }
-        .incident-panel.show { display: block; }
-        .incident-panel.highlight {
-            box-shadow: 0 0 34px rgba(255, 64, 93, 0.14), 0 18px 50px rgba(0, 0, 0, 0.32);
-        }
-        .incident-overview {
-            display: grid;
-            grid-template-columns: minmax(260px, 0.8fr) 1fr;
-            gap: 14px;
-            padding: 16px 18px 0;
-        }
-        .attacker-card, .incident-summary, .demo-error {
-            border: 1px solid rgba(101, 231, 255, 0.14);
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.035);
-            padding: 14px;
-        }
-        .attacker-card {
-            border-color: rgba(255, 64, 93, 0.28);
-            background: rgba(255, 64, 93, 0.07);
-        }
-        .attacker-title, .summary-title {
-            color: var(--muted);
-            font-size: 0.72rem;
-            font-weight: 900;
-            text-transform: uppercase;
-        }
-        .attacker-ip {
-            margin-top: 8px;
-            color: var(--red);
-            font-family: Consolas, monospace;
-            font-size: 1.35rem;
-            font-weight: 900;
-        }
-        .attacker-grid {
-            display: grid;
-            gap: 8px;
-            margin-top: 12px;
-            font-family: Consolas, monospace;
-            font-size: 0.82rem;
-        }
-        .attacker-row {
-            display: grid;
-            grid-template-columns: 120px 1fr;
-            gap: 8px;
-        }
-        .attacker-row span:first-child { color: var(--muted); }
-        .incident-summary p {
-            margin-top: 8px;
-            color: var(--text);
-            line-height: 1.45;
-        }
-        .incident-progress {
-            display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
-            gap: 10px;
-            padding: 16px 18px 0;
-        }
-        .progress-step {
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 46px;
-            padding: 10px 12px;
-            border: 1px solid rgba(101, 231, 255, 0.12);
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.03);
-            color: var(--muted);
-            font-family: Consolas, monospace;
-            font-size: 0.72rem;
-            font-weight: 900;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            opacity: 0.3;
-            transition: opacity 180ms ease, transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease, color 180ms ease, background 180ms ease;
-        }
-        .progress-step::before {
-            content: "";
-            width: 9px;
-            height: 9px;
-            margin-right: 10px;
-            border-radius: 50%;
-            background: currentColor;
-            box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.03);
-        }
-        .progress-step.active {
-            opacity: 1;
-            transform: translateY(-1px);
-            box-shadow: 0 0 14px rgba(101, 231, 255, 0.12);
-        }
-        .progress-step.completed {
-            opacity: 0.7;
-        }
-        .progress-step[data-step="detection"] { color: var(--yellow); }
-        .progress-step[data-step="suspicion"] { color: var(--orange); }
-        .progress-step[data-step="correlation"] { color: var(--cyan); }
-        .progress-step[data-step="critical"],
-        .progress-step[data-step="response"] { color: var(--red); }
-        .progress-step.active[data-step="detection"],
-        .progress-step.active[data-step="suspicion"],
-        .progress-step.active[data-step="correlation"],
-        .progress-step.active[data-step="critical"],
-        .progress-step.active[data-step="response"] {
-            border-color: currentColor;
-            background: rgba(255, 255, 255, 0.05);
-            box-shadow: 0 0 14px currentColor;
-        }
-        .progress-step.active[data-step="critical"],
-        .progress-step.active[data-step="response"] {
-            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
-        }
-        .demo-error {
-            display: none;
-            margin: 14px 18px 0;
-            border-color: rgba(255, 159, 67, 0.34);
-            background: rgba(255, 159, 67, 0.08);
-            color: var(--yellow);
-            font-weight: 800;
-        }
-        .demo-error.show { display: block; }
-        .timeline {
-            position: relative;
-            display: grid;
-            gap: 14px;
-            padding: 22px 18px 20px 34px;
-        }
-        .timeline::before {
-            content: "";
-            position: absolute;
-            left: 34px;
-            top: 24px;
-            bottom: 26px;
-            width: 2px;
-            background: linear-gradient(180deg, var(--yellow), var(--orange), var(--red));
-            box-shadow: 0 0 18px rgba(255, 64, 93, 0.14);
-        }
-        .timeline-item {
-            position: relative;
-            display: grid;
-            grid-template-columns: 54px 150px 1fr auto;
-            gap: 14px;
-            align-items: start;
-            margin-left: 18px;
-            padding: 14px;
-            border: 1px solid rgba(101, 231, 255, 0.14);
-            border-left: 5px solid var(--green);
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.03);
-            opacity: 0;
-            transform: translateY(8px);
-            animation: timelineIn 360ms ease forwards;
-        }
-        .timeline-item::before {
-            content: "";
-            position: absolute;
-            left: -31px;
-            top: 21px;
-            width: 13px;
-            height: 13px;
-            border: 2px solid currentColor;
-            border-radius: 50%;
-            background: #05080f;
-            box-shadow: 0 0 0 4px rgba(5, 8, 15, 0.96);
-        }
-        .timeline-item.low {
-            color: var(--green);
-            border-left-color: var(--green);
-            background: rgba(34, 230, 139, 0.05);
-        }
-        .timeline-item.medium {
-            color: var(--yellow);
-            border-left-color: var(--yellow);
-            background: rgba(250, 204, 21, 0.055);
-        }
-        .timeline-item.critical {
-            color: var(--red);
-            border-left-color: var(--red);
-            background: rgba(255, 64, 93, 0.08);
-            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
-        }
-        .timeline-time, .timeline-meta { color: var(--muted); font-family: Consolas, monospace; font-size: 0.78rem; }
-        .timeline-icon {
-            display: grid;
-            place-items: center;
-            width: 40px;
-            height: 40px;
-            border: 1px solid currentColor;
-            border-radius: 7px;
-            background: rgba(255, 255, 255, 0.05);
-            font-size: 1.25rem;
-        }
-        .timeline-title { font-weight: 900; text-transform: uppercase; }
-        .timeline-desc { margin-top: 5px; color: var(--muted); }
-        .severity-badge {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 86px;
-            min-height: 30px;
-            padding: 5px 10px;
-            border: 1px solid currentColor;
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.045);
-            font-family: Consolas, monospace;
-            font-size: 0.74rem;
-            font-weight: 900;
-            letter-spacing: 0;
-            text-transform: uppercase;
-        }
-        .severity-badge.low { color: var(--green); }
-        .severity-badge.medium { color: var(--yellow); }
-        .severity-badge.critical { color: var(--red); }
-
-        .tag.low { color: var(--green); }
-        .tag.medium { color: var(--yellow); }
-        .tag.critical { color: var(--red); }
-
-        .action.bloqueio { color: var(--red); }
-
-        .grid {
-            display: grid;
-            grid-template-columns: minmax(0, 1.1fr) minmax(380px, 0.9fr);
-            grid-template-areas:
-                "analytics map"
-                "feed feed";
-            gap: 16px;
-            align-items: stretch;
-        }
-        .analytics-column { grid-area: analytics; display: grid; gap: 16px; align-content: start; }
-        .map-column { grid-area: map; display: grid; align-content: start; }
-        .feed-panel { grid-area: feed; }
-        .panel { overflow: hidden; }
-        .panel-head {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 14px;
-            padding: 16px 18px;
-            border-bottom: 1px solid var(--border);
-            background: rgba(17, 28, 44, 0.76);
-        }
-        .panel-title { font-size: 1rem; font-weight: 900; text-transform: uppercase; }
-        .live { color: var(--cyan); font-family: Consolas, monospace; font-size: 0.75rem; font-weight: 800; }
-        .chart-box { height: 260px; padding: 16px; }
-
-        .analytics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }
-        .rank-list { display: grid; gap: 12px; padding: 18px; }
-        .rank-item {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 12px;
-            padding: 12px;
-            border: 1px solid rgba(101, 231, 255, 0.12);
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.03);
-            font-family: Consolas, monospace;
-            font-size: 0.86rem;
-        }
-        .ip-link {
-            color: var(--cyan);
-            text-decoration: underline;
-            text-underline-offset: 3px;
-            cursor: pointer;
-        }
-
-        .map-stage {
-            position: relative;
-            height: 500px;
-            margin: 16px;
-            overflow: hidden;
-            border: 1px solid rgba(101, 231, 255, 0.15);
-            border-radius: 8px;
-            background:
-                radial-gradient(circle at 50% 56%, rgba(101, 231, 255, 0.10), transparent 50%),
-                linear-gradient(rgba(101, 231, 255, 0.035) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(101, 231, 255, 0.035) 1px, transparent 1px),
-                #070c15;
-            background-size: auto, 30px 30px, 30px 30px, auto;
-        }
-
-        .world { position: absolute; inset: 7% 5%; width: 90%; height: 72%; opacity: 0.42; filter: drop-shadow(0 0 16px rgba(101, 231, 255, 0.18)); }
-        .world path { fill: rgba(101, 231, 255, 0.13); stroke: rgba(101, 231, 255, 0.46); stroke-width: 1.4; }
-
-        .attack-line {
-            position: absolute;
-            left: var(--x1);
-            top: var(--y1);
-            width: var(--len);
-            height: 2px;
-            background: linear-gradient(90deg, transparent, var(--line-color), var(--cyan));
-            transform: rotate(var(--angle));
-            transform-origin: left center;
-            box-shadow: 0 0 16px var(--line-color);
-            animation: attackLine 2.2s ease-out forwards;
-        }
-
-        .map-point {
-            position: absolute;
-            left: var(--x);
-            top: var(--y);
-            min-width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: currentColor;
-            color: var(--yellow);
-            transform: translate(-50%, -50%);
-            box-shadow: 0 0 10px currentColor, 0 0 24px currentColor;
-        }
-        .map-point.critical { color: var(--red); }
-        .map-point.destination { color: var(--green); width: 15px; height: 15px; }
-        .country-label {
-            position: absolute;
-            left: 16px;
-            top: -6px;
-            color: var(--muted);
-            font-family: Consolas, monospace;
-            font-size: 0.68rem;
-            white-space: nowrap;
-        }
-        .map-point::after {
-            content: attr(data-tip);
-            position: absolute;
-            left: 50%;
-            bottom: 22px;
-            width: max-content;
-            max-width: 260px;
-            padding: 8px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            background: rgba(5, 8, 15, 0.96);
-            color: var(--text);
-            white-space: pre-line;
-            font-family: Consolas, monospace;
-            font-size: 0.72rem;
-            opacity: 0;
-            pointer-events: none;
-            transform: translateX(-50%);
-            z-index: 8;
-        }
-        .map-point:hover::after { opacity: 1; }
-        .map-legend { display: grid; gap: 8px; padding: 0 16px 16px; color: var(--muted); font-family: Consolas, monospace; font-size: 0.78rem; }
-
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 14px; border-bottom: 1px solid rgba(101, 231, 255, 0.10); text-align: left; vertical-align: top; }
-        th { position: sticky; top: 0; background: #09101c; color: var(--cyan); font-family: Consolas, monospace; font-size: 0.72rem; text-transform: uppercase; }
-        tbody { font-size: 0.88rem; }
-        .feed { max-height: 640px; overflow: auto; }
-        .empty-state {
-            display: grid;
-            gap: 7px;
-            padding: 14px;
-            border: 1px dashed rgba(101, 231, 255, 0.22);
-            border-radius: 7px;
-            background: rgba(101, 231, 255, 0.035);
-            color: var(--muted);
-            font-family: Consolas, monospace;
-            font-size: 0.82rem;
-        }
-        .empty-state strong { color: var(--cyan); }
-        .placeholder-row {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 12px;
-            align-items: center;
-            padding: 12px;
-            border: 1px solid rgba(101, 231, 255, 0.10);
-            border-radius: 6px;
-            background: linear-gradient(90deg, rgba(101, 231, 255, 0.04), rgba(255, 255, 255, 0.025));
-            font-family: Consolas, monospace;
-            font-size: 0.82rem;
-        }
-        .placeholder-row span { color: var(--muted); }
-        .skeleton-line {
-            display: block;
-            width: 100%;
-            height: 10px;
-            border-radius: 999px;
-            background: linear-gradient(90deg, rgba(101,231,255,0.10), rgba(101,231,255,0.22), rgba(101,231,255,0.10));
-            background-size: 220% 100%;
-            animation: skeletonPulse 1.8s ease-in-out infinite;
-        }
-
-        .tag, .action {
-            display: inline-flex;
-            align-items: center;
-            min-height: 26px;
-            padding: 4px 8px;
-            border: 1px solid currentColor;
-            border-radius: 6px;
-            font-size: 0.72rem;
-            font-weight: 900;
-            text-transform: uppercase;
-            white-space: nowrap;
-        }
-        .tag.low, .action.monitorado { color: var(--green); }
-        .tag.medium, .action.investigando { color: var(--yellow); }
-        .tag.high { color: var(--orange); }
-        .tag.critical, .action.bloqueio { color: var(--red); }
-        .mono { font-family: Consolas, monospace; }
-        .ti { color: var(--red); font-weight: 800; }
-        .clickable-row { cursor: pointer; }
-        .clickable-row:hover { background: rgba(101, 231, 255, 0.08); }
-        .replay-row { background: rgba(255, 64, 93, 0.07); }
-        .history-mode .incident-panel { display: none !important; }
-        .history-mode .map-column { display: none; }
-        .history-mode .grid { grid-template-columns: 1fr; grid-template-areas: "analytics" "feed"; }
-        #ai-xdr-section > div,
-        #saas-section > div,
-        #campaigns-section > div {
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
-        }
-
-        .drawer-backdrop {
-            position: fixed;
-            inset: 0;
-            display: none;
-            background: rgba(0, 0, 0, 0.45);
-            z-index: 20;
-        }
-        .drawer-backdrop.open { display: block; }
-        .drawer {
-            position: fixed;
-            top: 0;
-            right: 0;
-            width: min(460px, 100%);
-            height: 100vh;
-            padding: 22px;
-            border-left: 1px solid var(--border);
-            background: #07101d;
-            box-shadow: -20px 0 60px rgba(0, 0, 0, 0.45);
-            overflow: auto;
-            transform: translateX(100%);
-            transition: transform 180ms ease;
-            z-index: 21;
-        }
-        .drawer.open { transform: translateX(0); }
-        .drawer-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            margin-bottom: 18px;
-        }
-        .detail-list {
-            display: grid;
-            gap: 10px;
-            font-family: Consolas, monospace;
-            font-size: 0.86rem;
-        }
-        .detail-row {
-            padding: 10px;
-            border: 1px solid rgba(101, 231, 255, 0.12);
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.03);
-        }
-        .detail-label {
-            color: var(--muted);
-            font-size: 0.72rem;
-            text-transform: uppercase;
-            margin-bottom: 4px;
-        }
-        .incident-form {
-            display: grid;
-            gap: 10px;
-        }
-        .incident-form textarea,
-        .incident-form input {
-            width: 100%;
-            min-height: 38px;
-            border: 1px solid rgba(101, 231, 255, 0.24);
-            border-radius: 6px;
-            background: #07111f;
-            color: var(--text);
-            padding: 9px;
-            font: inherit;
-        }
-        .incident-form textarea { min-height: 92px; resize: vertical; }
-        .notice {
-            margin-top: 10px;
-            color: var(--yellow);
-            font-weight: 800;
-        }
-
-        @keyframes attackLine {
-            0% { opacity: 0; clip-path: inset(0 100% 0 0); }
-            20% { opacity: 1; }
-            100% { opacity: 0; clip-path: inset(0 0 0 0); }
-        }
-        @keyframes cardPulse {
-            0% { box-shadow: 0 0 0 rgba(255, 64, 93, 0); }
-            45% { box-shadow: 0 0 28px rgba(255, 64, 93, 0.28); }
-            100% { box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32); }
-        }
-        @keyframes timelineIn {
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        @keyframes skeletonPulse {
-            0% { background-position: 100% 0; }
-            100% { background-position: -100% 0; }
-        }
-
-        @media (max-width: 1120px) {
-            header, .grid, .analytics-grid { grid-template-columns: 1fr; }
-            .grid { grid-template-areas: "analytics" "map" "feed"; }
-            .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .ops-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .header-status { text-align: left; }
-            .toolbar { justify-content: flex-start; }
-        }
-        @media (max-width: 680px) {
-            .shell { width: min(100% - 20px, 1600px); }
-            .cards { grid-template-columns: 1fr; }
-            .ops-strip { grid-template-columns: 1fr; }
-            .toolbar .select, .toolbar .search, .toolbar .button { width: 100%; flex-basis: 100%; }
-            .login-bar { grid-template-columns: 1fr; }
-            th, td { padding: 10px 8px; font-size: 0.78rem; }
-            table { min-width: 880px; }
-            .feed { max-height: 520px; overflow-x: auto; }
-            .panel-head { align-items: flex-start; flex-direction: column; }
-            .card { min-height: 96px; padding: 14px; }
-            .card-value { font-size: 2rem; overflow-wrap: anywhere; }
-            .rank-item, .placeholder-row { grid-template-columns: 1fr; }
-            .map-stage { height: 380px; }
-            .incident-overview { grid-template-columns: 1fr; }
-            .incident-progress { grid-template-columns: 1fr; }
-            .timeline { padding-left: 24px; }
-            .timeline::before { left: 24px; }
-            .timeline-item { grid-template-columns: 1fr; margin-left: 18px; }
-            .timeline-item::before { left: -29px; }
-        }
-    </style>
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs/loader.min.js"></script>
 </head>
 <body>
     <main class="shell">
         <header>
-            <section>
-                <h1>SENTINELA 7.0</h1>
-                <p class="subtitle">Plataforma SOC local com incidentes persistidos, correlação multi-IP, MITRE ATT&CK, investigação por entidade e relatórios exportáveis.</p>
-                <p class="notice">Ambiente local de demonstração. Nenhuma ação real de ataque ou bloqueio é executada.</p>
-            </section>
-            <aside class="header-status">
-                <form class="login-bar" id="loginForm">
-                    <input class="login-input" id="usernameInput" autocomplete="username" value="admin" aria-label="Usuário">
-                    <input class="login-input" id="passwordInput" type="password" autocomplete="current-password" placeholder="senha" aria-label="Senha">
-                    <button class="button" id="loginButton" type="submit">Login</button>
-                </form>
-                <div class="toolbar">
-                    <select class="select" id="rangeSelect" aria-label="Filtro de tempo">
-                        <option value="5m">Últimos 5 min</option>
-                        <option value="15m">Últimos 15 min</option>
-                        <option value="1h" selected>Última 1h</option>
-                        <option value="24h">Últimas 24h</option>
-                    </select>
-                    <select class="select" id="severityFilter" aria-label="Filtro de criticidade">
-                        <option value="all">Todas as severidades</option>
-                        <option value="critical">Crítico</option>
-                        <option value="high">Alto</option>
-                        <option value="medium">Médio</option>
-                        <option value="low">Baixo</option>
-                    </select>
-                    <select class="select" id="sourceFilter" aria-label="Filtro de fonte de ameaça">
-                        <option value="all">Todas as fontes</option>
-                        <option value="local">Local</option>
-                        <option value="external">Externa</option>
-                        <option value="none">Sem TI</option>
-                    </select>
-                    <select class="select" id="blockFilter" aria-label="Filtro de bloqueio simulado">
-                        <option value="all">Todos bloqueios</option>
-                        <option value="true">Com simulated_block</option>
-                        <option value="false">Sem simulated_block</option>
-                    </select>
-                    <div class="mode-toggle" aria-label="Modo do dashboard">
-                        <button class="mode-button active" id="demoModeButton" type="button">DEMO</button>
-                        <button class="mode-button" id="historyModeButton" type="button">HISTÓRICO</button>
+            <div class="header-top">
+                <section class="brand-panel"><h1>SENTINELA SOC</h1></section>
+                <aside class="header-status">
+                    <div class="toolbar">
+                        <button class="button focus-toggle" id="focusModeButton">FOCUS</button>
+                        <select class="select" id="rangeSelect">
+                            <option value="5m">5m</option>
+                            <option value="1h" selected>1h</option>
+                            <option value="24h">24h</option>
+                        </select>
+                        <div class="mode-toggle">
+                            <button class="mode-button active" id="demoModeButton">DEMO</button>
+                            <button class="mode-button" id="huntingModeButton">HUNT</button>
+                        </div>
+                        <button class="button demo" id="simulateAttackButton">SIMULAR</button>
+                        <button class="button" id="refreshButton">SYNC</button>
                     </div>
-                    <input class="search" id="searchInput" type="search" placeholder="Buscar IP, status, tipo de evento ou serviço">
-                    <button class="button demo" id="simulateAttackButton" type="button">Simular Ataque</button>
-                    <button class="button" id="refreshButton" type="button">Atualizar</button>
-                </div>
-                <div class="muted">Nível de Ameaça</div>
-                <div class="level low" id="threatLevel">LOW</div>
-                <div class="muted" id="lastUpdate">Console inicializando</div>
-                <div class="session-line">
-                    <span id="sessionInfo">sessão local</span>
-                    <strong id="apiStatus" class="status-pill degraded">API checando</strong>
-                    <strong id="wsStatus" class="status-pill degraded">WS conectando</strong>
-                </div>
-            </aside>
+                    <div class="session-line">
+                        <strong id="apiStatus" class="status-pill degraded">API</strong>
+                        <strong id="wsStatus" class="status-pill degraded">WS</strong>
+                    </div>
+                    <form class="login-bar" id="loginForm">
+                        <input class="login-input" id="usernameInput" value="admin" style="width:50px;">
+                        <input class="login-input" id="passwordInput" type="password" placeholder="senha" style="width:50px;">
+                        <button class="button" id="loginButton">OK</button>
+                        <button class="button" id="logoutButton" type="button">OUT</button>
+                    </form>
+                </aside>
+            </div>
+            <div class="command-rail">
+                <div class="rail-item"><span class="rail-label">Level:</span><span class="level low" id="threatLevel">LOW</span></div>
+                <div class="rail-item"><span class="rail-label">Incid:</span><span class="rail-value" id="totalEventos">0</span></div>
+                <div class="rail-item"><span class="rail-label">Crit:</span><span class="rail-value" id="eventosCriticos" style="color:var(--red)">0</span></div>
+                <div class="rail-item"><span class="rail-label">IPs:</span><span class="rail-value" id="ipsUnicos">0</span></div>
+                <div class="rail-item"><span class="rail-label">Risk:</span><span class="rail-value" id="bloqueios">0</span></div>
+                <div class="rail-item"><span class="rail-label">MITRE:</span><span class="rail-value" id="tiMatches">N/D</span></div>
+                <div class="rail-item"><span class="rail-label">RAM:</span><span class="rail-value" id="opsMemoryValue">--</span></div>
+                <div class="rail-item"><span class="rail-label">CPU:</span><span class="rail-value" id="opsUptimeValue">--</span></div>
+                <div style="flex:1;"></div>
+                <input class="search" id="searchInput" placeholder="Filtro rápido..." style="width:150px;">
+                <select class="select" id="severityFilter"><option value="all">Severidades</option></select>
+            </div>
         </header>
 
         <div class="critical-banner" id="criticalBanner">INCIDENTE CRÍTICO EM ANDAMENTO</div>
+<div class="dashboard-masonry" id="dashboard-masonry">
+    <!-- FILHOS DIRETOS SEM WRAPPERS -->
+    
+    <section class="widget-card" id="incidentsListPanel">
+        <div class="panel-head"><h2 class="panel-title">Fila de Incidentes</h2><div class="live" id="incidentsStatus">...</div></div>
+        <div class="toolbar" style="padding: 4px; border-bottom: 1px solid var(--border-subtle);">
+            <select class="select" id="incidentStatusFilter" style="flex:1;"><option value="all">Status</option></select>
+        </div>
+        <div class="rank-list" id="incidentsList"></div>
+    </section>
 
-        <section class="cards">
-            <article class="card"><div class="card-label" id="cardLabelTotal">Incidentes abertos</div><div class="card-value" id="totalEventos">0</div></article>
-            <article class="card"><div class="card-label" id="cardLabelCritical">Incidentes críticos</div><div class="card-value" id="eventosCriticos">0</div></article>
-            <article class="card"><div class="card-label" id="cardLabelIps">IPs envolvidos</div><div class="card-value" id="ipsUnicos">0</div></article>
-            <article class="card"><div class="card-label" id="cardLabelBlocks">Maior score</div><div class="card-value" id="bloqueios">0</div></article>
-            <article class="card"><div class="card-label" id="cardLabelTi">MITRE dominante</div><div class="card-value" id="tiMatches">N/D</div></article>
-            <article class="card"><div class="card-label">Último replay</div><div class="card-value" id="lastReplayCard">N/D</div></article>
-        </section>
-
-        <section class="ops-strip" aria-label="Observabilidade operacional">
-            <article class="ops-item warn" id="opsApi"><div class="ops-label">API</div><div class="ops-value" id="opsApiValue">checando</div></article>
-            <article class="ops-item warn" id="opsWs"><div class="ops-label">WebSocket</div><div class="ops-value" id="opsWsValue">conectando</div></article>
-            <article class="ops-item warn" id="opsMemory"><div class="ops-label">RAM disponível</div><div class="ops-value" id="opsMemoryValue">aguardando métrica</div></article>
-            <article class="ops-item warn" id="opsDisk"><div class="ops-label">Disco raiz</div><div class="ops-value" id="opsDiskValue">aguardando métrica</div></article>
-            <article class="ops-item warn" id="opsUptime"><div class="ops-label">Uptime host</div><div class="ops-value" id="opsUptimeValue">aguardando métrica</div></article>
-        </section>
-
-        <section class="panel incident-panel" id="incidentPanel">
-            <div class="panel-head">
-                <div>
-                    <h2 class="panel-title">Linha do Tempo do Incidente</h2>
-                    <p class="muted">Progressão visual do ataque controlado registrado apenas como bloqueio simulado.</p>
-                </div>
-                <div class="live" id="incidentStatus">MODO DEMONSTRAÇÃO</div>
+    <section class="widget-card" id="incidentPanel">
+        <div class="panel-head"><h2 class="panel-title">Workspace Investigativo</h2><div class="live">LIVE</div></div>
+        <div id="attackChainWrapper" style="padding:8px; border-bottom: 1px solid var(--border-subtle);">
+            <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                <span class="rail-label">Atacante:</span>
+                <strong id="attackerIp">--</strong>
             </div>
-            <div class="demo-error" id="demoError">Falha ao executar simulação. Verifique autenticação ou API.</div>
-            <div class="incident-overview" id="incidentOverview">
-                <article class="attacker-card">
-                    <div class="attacker-title">Atacante Principal</div>
-                    <div class="attacker-ip" id="attackerIp">--</div>
-                    <div class="attacker-grid">
-                        <div class="attacker-row"><span>Vetor Inicial</span><strong id="attackerVector">--</strong></div>
-                        <div class="attacker-row"><span>Severidade Máxima</span><strong id="attackerSeverity">--</strong></div>
-                        <div class="attacker-row"><span>Ação do SOC</span><strong id="attackerAction">--</strong></div>
-                    </div>
-                </article>
-                <article class="incident-summary">
-                    <div class="summary-title">Resumo do Incidente</div>
-                    <p id="incidentSummaryText">Clique em Simular Ataque para gerar uma narrativa de investigação SOC controlada.</p>
-                </article>
+            <div class="mitre-flow" id="attackChains"></div>
+        </div>
+        <div class="timeline-container">
+            <div class="timeline-compact" id="enterpriseTimeline"></div>
+        </div>
+    </section>
+
+    <section class="widget-card" id="aiIntelligencePanel">
+        <div class="panel-head"><h2 class="panel-title">AI Anomaly & Scores</h2></div>
+        <div id="ai-scores-list" class="rank-list"></div>
+    </section>
+
+    <section class="widget-card" id="soarPanel">
+        <div class="panel-head"><h2 class="panel-title">SOAR Response Status</h2></div>
+        <div id="soar-status" class="rank-list"></div>
+    </section>
+
+    <section class="widget-card" id="feedPanel">
+        <div class="panel-head"><h2 class="panel-title">Operational Alert Stream</h2></div>
+        <div class="feed-container">
+            <div class="feed">
+                <table>
+                    <thead><tr><th>TIME</th><th>SOURCE &rarr; TARGET</th><th>SEV</th><th>RISK</th><th>MITRE</th><th>ACTION</th></tr></thead>
+                    <tbody id="feedBody"></tbody>
+                </table>
             </div>
-            <div class="incident-progress" id="incidentProgress"></div>
-            <div class="timeline" id="incidentTimeline"></div>
-        </section>
+        </div>
+    </section>
 
-        <section id="ai-xdr-section" class="panel" style="margin-bottom: 16px; padding: 20px; border-top: 4px solid var(--orange);">
-            <h2 class="panel-title mb-4" style="margin-bottom: 15px; color: var(--orange);">AI-Native XDR Analytics</h2>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
-                    <h3 class="font-bold mb-4" style="color: var(--orange);">ML Anomaly Scores</h3>
-                    <div id="ai-scores-list" class="space-y-2">
-                        <p class="muted italic">Monitorando anomalias estatísticas...</p>
-                    </div>
-                </div>
-                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
-                    <h3 class="font-bold mb-4" style="color: var(--purple);">Attack Path Intelligence</h3>
-                    <div id="graph-paths" class="space-y-4">
-                        <p class="muted italic">Analisando trajetórias cross-domain...</p>
-                    </div>
-                </div>
-                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
-                    <h3 class="font-bold mb-4" style="color: var(--cyan);">Autonomous SOC Status</h3>
-                    <div id="soar-status" class="space-y-2"></div>
-                </div>
-            </div>
-        </section>
+    <section class="widget-card" id="huntingConsole">
+        <div class="panel-head"><h2 class="panel-title">Threat Hunting</h2></div>
+        <div class="query-row"><input class="search" id="huntingQuery" placeholder="Query..." style="flex:1;"><button class="button" id="huntingSearchButton">HUNT</button></div>
+        <div class="rank-list" id="huntingResults"></div>
+    </section>
 
-        <section id="graph-section"
- class="panel" style="margin-bottom: 16px; padding: 20px; border-top: 4px solid var(--purple);">
-            <h2 class="panel-title mb-4" style="margin-bottom: 15px; color: var(--purple);">Graph Analytics & XDR Path Analysis</h2>
-            <div style="display: grid; grid-template-columns: 1fr; gap: 20px;">
-                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
-                    <h3 class="font-bold mb-4" style="color: var(--purple);">Caminhos de Ataque Cross-Domain (Neo4j)</h3>
-                    <div id="graph-paths" class="space-y-4">
-                        <p class="muted italic">Analisando grafo de relacionamentos...</p>
-                    </div>
-                </div>
-            </div>
-        </section>
+    <section class="widget-card" id="iocPanel">
+        <div class="panel-head"><h2 class="panel-title">IOC Enrichment</h2></div>
+        <div class="query-row"><input class="search" id="iocValue" placeholder="IP, host, hash..." style="flex:1;"><button class="button" id="iocLookupButton">ENRICH</button></div>
+        <div class="rank-list" id="iocResults"></div>
+    </section>
 
-        <section id="saas-section"
- class="panel" style="margin-bottom: 16px; padding: 20px; border-top: 4px solid var(--green);">
-            <h2 class="panel-title mb-4" style="margin-bottom: 15px; color: var(--green);">SaaS Enterprise Management</h2>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
-                    <h3 class="font-bold mb-4" style="color: var(--green);">Usage & Billing</h3>
-                    <div id="billing-info"></div>
-                </div>
-                <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px;">
-                    <h3 class="font-bold mb-4" style="color: var(--green);">Customer Onboarding</h3>
-                    <div style="display: grid; gap: 10px;">
-                        <input id="new-tenant-id" placeholder="Tenant ID (ex: acme-corp)" class="select" style="width: 100%;">
-                        <input id="new-tenant-name" placeholder="Client Name" class="select" style="width: 100%;">
-                        <button onclick="createTenant()" class="button" style="border-color: var(--green); color: var(--green);">Providenciar Novo Tenant</button>
-                    </div>
-                </div>
-            </div>
-        </section>
+    <section class="widget-card" id="replayPanel">
+        <div class="panel-head"><h2 class="panel-title">Replay & Retention</h2></div>
+        <div class="toolbar" style="padding: 4px; border-bottom: 1px solid var(--border-subtle);">
+            <button class="button" id="replayButton">Iniciar Replay 24h</button>
+        </div>
+        <div class="rank-list" id="replayResults"></div>
+    </section>
 
-        <section id="campaigns-section"
- class="panel" style="margin-bottom: 16px; padding: 20px;">
-            <h2 class="panel-title mb-4" style="margin-bottom: 15px;">Campanhas e Heatmap MITRE</h2>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                <div style="background: rgba(255,255,255,0.03); p-6 rounded shadow border-left: 4px solid var(--cyan); padding: 15px;">
-                    <h3 class="font-bold mb-4" style="color: var(--cyan); margin-bottom: 10px;">Matriz de Táticas (Heatmap)</h3>
-                    <div id="mitre-heatmap" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
-                </div>
-                <div style="background: rgba(255,255,255,0.03); p-6 rounded shadow border-left: 4px solid var(--yellow); padding: 15px;">
-                    <h3 class="font-bold mb-4" style="color: var(--yellow); margin-bottom: 10px;">Ações SOAR Pendentes</h3>
-                    <div id="pending-actions" style="display: grid; gap: 10px;">
-                        <p class="muted italic">Nenhuma ação aguardando aprovação.</p>
-                    </div>
-                </div>
-            </div>
-        </section>
+    <section class="widget-card" id="mapPanel">
+        <div class="panel-head"><h2 class="panel-title">Geo Threat Map</h2></div>
+        <div class="map-stage" id="mapStage">
+            <svg class="world" viewBox="0 0 900 430"><path d="M92 148l62-36 84 22 24 47-42 32-83-8-68-32z"></path></svg>
+            <div id="lines"></div><div id="points"></div>
+        </div>
+    </section>
 
-        <section class="panel" id="incidentsPanel" style="margin-bottom:16px;">
-            <div class="panel-head">
-                <div>
-                    <h2 class="panel-title">Incidentes</h2>
-                    <p class="muted">Incidentes persistidos com correlação por IP, usuário, serviço, MITRE, replay e janela temporal.</p>
-                </div>
-                <div class="live" id="incidentsStatus">CARREGANDO</div>
-            </div>
-            <div class="toolbar" style="margin-bottom:12px;">
-                <select class="select" id="incidentStatusFilter" aria-label="Filtro de status de incidente">
-                    <option value="all">Todos os status</option>
-                    <option value="NEW">NEW</option>
-                    <option value="INVESTIGATING">INVESTIGATING</option>
-                    <option value="CONTAINED">CONTAINED</option>
-                    <option value="RESOLVED">RESOLVED</option>
-                    <option value="FALSE_POSITIVE">FALSE_POSITIVE</option>
-                    <option value="CLOSED">CLOSED</option>
-                </select>
-                <select class="select" id="incidentSeverityFilter" aria-label="Filtro de severidade de incidente">
-                    <option value="all">Todas as severidades</option>
-                    <option value="CRITICAL">CRITICAL</option>
-                    <option value="HIGH">HIGH</option>
-                    <option value="MEDIUM">MEDIUM</option>
-                    <option value="LOW">LOW</option>
-                </select>
-                <input class="search" id="incidentSearchInput" type="search" placeholder="Buscar IP, MITRE ou incident_id">
-            </div>
-            <div class="rank-list" id="incidentsList"></div>
-        </section>
+    <section class="widget-card" id="ruleStudio">
+        <div class="panel-head"><h2 class="panel-title">Rule Studio Enterprise</h2></div>
+        <div class="rule-editor">
+            <div id="monacoEditor"></div>
+            <div class="toolbar" style="margin-top:4px;"><button class="button" id="validateRuleButton">Validar</button><button class="button demo" id="saveRuleButton">Salvar</button></div>
+            <div id="ruleStudioResults" class="rank-list"></div>
+        </div>
+    </section>
 
-        <section class="grid">
-            <div class="analytics-column">
-                <section class="panel">
-                    <div class="panel-head">
-                        <div>
-                            <h2 class="panel-title">Eventos por tempo</h2>
-                            <p class="muted" id="rangeLabel">Filtro: Última 1h</p>
-                        </div>
-                        <div class="live">TEMPO REAL</div>
-                    </div>
-                    <div class="chart-box"><canvas id="eventsChart"></canvas></div>
-                </section>
+    <section class="widget-card" id="adminUsersPanel">
+        <div class="panel-head"><h2 class="panel-title">RBAC & Users</h2><div class="live" id="usersStatus">...</div></div>
+        <div class="rank-list" id="usersList"></div>
+    </section>
+</div>
 
-                <section class="analytics-grid">
-                    <div class="panel">
-                        <div class="panel-head"><h2 class="panel-title">Média de risco por IP</h2></div>
-                        <div class="rank-list" id="avgRiskList"></div>
-                    </div>
-                    <div class="panel">
-                        <div class="panel-head"><h2 class="panel-title">Top portas atacadas</h2></div>
-                        <div class="rank-list" id="topPortsList"></div>
-                    </div>
-                    <div class="panel">
-                        <div class="panel-head"><h2 class="panel-title">Top IPs por frequência</h2></div>
-                        <div class="rank-list" id="rankFreq"></div>
-                    </div>
-                    <div class="panel">
-                        <div class="panel-head"><h2 class="panel-title">Distribuição de ataques</h2></div>
-                        <div class="chart-box"><canvas id="typeChart"></canvas></div>
-                    </div>
-                </section>
-            </div>
-
-            <section class="panel map-column">
-                <div class="panel-head">
-                    <div>
-                        <h2 class="panel-title">Mapa Global de Ataques</h2>
-                        <p class="muted">Mapa com origens simuladas para fins educacionais.</p>
-                    </div>
-                    <div class="live">MAPA ENRIQUECIDO</div>
-                </div>
-                <div class="map-stage" id="mapStage">
-                    <svg class="world" viewBox="0 0 900 430" aria-hidden="true">
-                        <path d="M92 148l62-36 84 22 24 47-42 32-83-8-68-32z"></path>
-                        <path d="M225 246l58-10 39 38-15 80-50 38-42-58-12-55z"></path>
-                        <path d="M365 116l88-40 96 24 35 48-45 42-91 8-94-35z"></path>
-                        <path d="M463 234l69-22 54 34 14 66-55 72-58-41-42-71z"></path>
-                        <path d="M590 132l90-42 124 22 64 50-60 42-111 18-111-38z"></path>
-                        <path d="M700 250l67-22 76 32 21 55-54 32-84-12-56-42z"></path>
-                        <path d="M720 352l70-4 54 26-27 34-80 6-48-25z"></path>
-                    </svg>
-                    <div id="lines"></div>
-                    <div id="points"></div>
-                </div>
-                <div class="map-legend">
-                    <div>Destino: Brasil / Salvador</div>
-                    <div id="mapLast">Sensores em baseline operacional</div>
-                </div>
-            </section>
-
-            <section class="panel feed-panel">
-                <div class="panel-head">
-                    <div>
-                        <h2 class="panel-title">Feed de alertas</h2>
-                        <p class="muted">IP, status, risco, serviço, porta, fonte de threat intel e ação SOC</p>
-                    </div>
-                </div>
-                <div class="feed">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th id="feedHeadTime">Hora</th>
-                                <th>Origem -> Alvo</th>
-                                <th id="feedHeadStatus">Severidade</th>
-                                <th id="feedHeadRisk">Score</th>
-                                <th id="feedHeadConsolidation">Correlação</th>
-                                <th id="feedHeadService">MITRE / Regra</th>
-                                <th id="feedHeadIntel">Evidência</th>
-                                <th id="feedHeadAction">Playbook</th>
-                            </tr>
-                        </thead>
-                        <tbody id="feedBody"></tbody>
-                    </table>
-                </div>
-            </section>
-        </section>
-    </main>
+</main>
 
     <div class="drawer-backdrop" id="drawerBackdrop"></div>
-    <aside class="drawer" id="detailDrawer" aria-label="Detalhamento do alerta">
-        <div class="drawer-head">
-            <div>
-                <h2 class="panel-title">Detalhamento do alerta</h2>
-                <p class="muted">Detalhamento operacional do evento selecionado.</p>
-            </div>
-            <button class="button" id="closeDrawer" type="button">Fechar</button>
-        </div>
+    <aside class="drawer" id="detailDrawer">
+        <div class="drawer-head"><div><h2 class="panel-title">Detalhamento</h2></div><button class="button" id="closeDrawer">Fechar</button></div>
         <div class="detail-list" id="detailContent"></div>
     </aside>
 
     <script>
         const API_ORIGIN = window.location.origin;
         const WS_ORIGIN = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
-        const API_URL = `${API_ORIGIN}/alertas`;
-        const DEMO_URL = `${API_ORIGIN}/demo/simulate-attack`;
-        const INCIDENTS_URL = `${API_ORIGIN}/incidents`;
-        const INVESTIGATION_URL = `${API_ORIGIN}/investigation/ip`;
-        const REPORT_URL = `${API_ORIGIN}/reports/incident`;
-        const RULES_URL = `${API_ORIGIN}/rules`;
-        const METRICS_URL = `${API_ORIGIN}/metrics/summary`;
-        const AUTH_URL = `${API_ORIGIN}/auth/token`;
+        const AUTH_URL = `${API_ORIGIN}/api/auth/login`;
+        const AUTH_REFRESH_URL = `${API_ORIGIN}/api/auth/refresh`;
         const READY_URL = `${API_ORIGIN}/ready`;
         const HOST_METRICS_URL = `${API_ORIGIN}/runtime/host_metrics.json`;
         const WS_URL = `${WS_ORIGIN}/ws/alerts`;
         const LEGACY_API_TOKEN = 'sentinela-demo-token';
-        const origins = [
-            { country: 'Rússia', city: 'Moscow', ip: '45.67.89.12', x: 58, y: 28 },
-            { country: 'China', city: 'Beijing', ip: '185.220.101.44', x: 76, y: 39 },
-            { country: 'EUA', city: 'Ashburn', ip: '91.219.236.15', x: 24, y: 39 },
-            { country: 'Brasil', city: 'São Paulo', ip: '103.27.202.66', x: 36, y: 70 },
-            { country: 'Alemanha', city: 'Frankfurt', ip: '172.16.5.67', x: 50, y: 36 },
-            { country: 'Holanda', city: 'Amsterdam', ip: '203.0.113.45', x: 48, y: 34 },
-            { country: 'Índia', city: 'Mumbai', ip: '198.51.100.88', x: 68, y: 55 },
-            { country: 'Reino Unido', city: 'London', ip: '203.0.113.10', x: 46, y: 33 }
-        ];
-        const destination = { country: 'Brasil', city: 'Salvador', x: 39, y: 64 };
-        const rangeNames = { '5m': 'Últimos 5 min', '15m': 'Últimos 15 min', '1h': 'Última 1h', '24h': 'Últimas 24h' };
+        
+        const origins = [{ city: 'Moscow', ip: '45.67.89.12', x: 58, y: 28 },{ city: 'Beijing', ip: '185.220.101.44', x: 76, y: 39 },{ city: 'Ashburn', ip: '91.219.236.15', x: 24, y: 39 },{ city: 'São Paulo', ip: '103.27.202.66', x: 36, y: 70 }];
+        const destination = { x: 39, y: 64 };
+        
         let seenIds = new Set();
         let allAlerts = [];
-        let visibleAlerts = [];
-        let chart;
-        let typeChart;
-        let incidentTimeline = [];
-        let demoOnlyMode = false;
         let dashboardMode = 'demo';
         let session = JSON.parse(localStorage.getItem('sentinelaSession') || 'null');
-        let wsClient;
-        let wsReconnectTimer;
-        let apiState = { online: false, optionalFailures: 0, lastOk: null };
-        let optionalRefreshAt = 0;
+        let socketClient;
+        let socketRetryMs = 1000;
         let opsRefreshAt = 0;
 
-        const demoSignals = [
-            { label: 'sensor-edge-01', value: 'coletando', tone: 'var(--green)' },
-            { label: 'correlation-store', value: 'janela 5m', tone: 'var(--cyan)' },
-            { label: 'playbooks', value: 'simulados', tone: 'var(--yellow)' }
-        ];
-        const fallbackMitre = ['TA0001 Initial Access', 'TA0003 Persistence', 'TA0005 Defense Evasion', 'TA0008 Lateral Movement'];
-        const fallbackActions = [
-            ['PB-SOC-001', 'triagem simulada pronta'],
-            ['PB-SOC-004', 'contenção exige aprovação'],
-            ['PB-REPORT', 'evidências exportáveis']
-        ];
-
         const el = id => document.getElementById(id);
-        const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-        const risk = alert => Number.parseInt(alert.score_breakdown?.final_score ?? alert.score_final ?? alert.risco ?? alert.threat_score, 10) || 0;
-        const authHeaders = () => session?.token ? { 'Authorization': `Bearer ${session.token}` } : { 'X-SENTINELA-TOKEN': LEGACY_API_TOKEN };
+        const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+        const risk = a => Number.parseInt(a.score_breakdown?.final_score ?? a.score_final ?? a.risco ?? 0, 10) || 0;
+        const authHeaders = () => session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : { 'X-SENTINELA-TOKEN': LEGACY_API_TOKEN };
 
-        function setPill(id, text, className) {
-            const node = el(id);
-            if (!node) return;
-            node.textContent = text;
-            node.className = `status-pill ${className}`;
+        function translateSeverity(sev) {
+            const s = String(sev || '').toUpperCase();
+            return { 'CRITICAL': 'CRÍTICO', 'HIGH': 'ALTO', 'MEDIUM': 'MÉDIO', 'LOW': 'BAIXO' }[s] || s;
         }
 
-        function setOps(id, value, state = 'ok') {
-            const card = el(id);
-            const valueNode = el(`${id}Value`);
-            if (!card || !valueNode) return;
-            valueNode.textContent = value;
-            card.className = `ops-item ${state}`;
-        }
-
-        function setApiStatus(state, detail = '') {
-            if (state === 'online') {
-                apiState.online = true;
-                apiState.lastOk = new Date();
-                apiState.optionalFailures = 0;
-                setPill('apiStatus', 'API online', 'online');
-                setOps('opsApi', 'online', 'ok');
-                return;
-            }
-            if (state === 'degraded') {
-                apiState.optionalFailures += 1;
-                setPill('apiStatus', detail || 'API degraded', 'degraded');
-                setOps('opsApi', detail || 'degraded', 'warn');
-                return;
-            }
-            apiState.online = false;
-            setPill('apiStatus', detail || 'API offline', 'critical');
-            setOps('opsApi', detail || 'offline', 'fail');
-        }
-
-        function formatUptime(seconds) {
-            const value = Number(seconds || 0);
-            const days = Math.floor(value / 86400);
-            const hours = Math.floor((value % 86400) / 3600);
-            const minutes = Math.floor((value % 3600) / 60);
-            if (days) return `${days}d ${hours}h`;
-            if (hours) return `${hours}h ${minutes}m`;
-            return `${minutes}m`;
-        }
-
-        function wsStateLabel(text, state) {
-            setPill('wsStatus', text, state);
-            setOps('opsWs', text.replace(/^WS\s+/i, ''), state === 'online' ? 'ok' : state === 'degraded' ? 'warn' : 'fail');
-        }
-
-        async function refreshOperationalStatus(force = false) {
-            const now = Date.now();
-            if (!force && now < opsRefreshAt) return;
-            opsRefreshAt = now + 10000;
-            try {
-                const ready = await fetch(READY_URL, { cache: 'no-store', headers: authHeaders() });
-                const payload = await ready.json().catch(() => ({}));
-                if (ready.status === 401) {
-                    setApiStatus('degraded', 'Login necessário');
-                } else if (ready.ok && payload.ready !== false && payload.status === 'ok') {
-                    setApiStatus('online');
-                } else {
-                    setApiStatus('degraded', 'API degraded');
-                }
-            } catch (error) {
-                setApiStatus('critical', 'API offline');
-            }
-
-            try {
-                const response = await fetch(HOST_METRICS_URL, { cache: 'no-store' });
-                if (response.status === 401) {
-                    setApiStatus('degraded', 'Login necessário');
-                    throw new Error('HTTP 401');
-                }
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const metrics = await response.json();
-                const available = Number(metrics.memory_mb?.available || 0);
-                const total = Number(metrics.memory_mb?.total || 0);
-                const usedPercent = total ? Math.round((1 - available / total) * 100) : 0;
-                const diskRaw = String(metrics.disk_root?.used_percent || '0%');
-                const diskPercent = Number.parseInt(diskRaw, 10) || 0;
-                setOps('opsMemory', `${available}MB livre (${usedPercent}% usado)`, usedPercent > 85 ? 'fail' : usedPercent > 70 ? 'warn' : 'ok');
-                setOps('opsDisk', `${diskRaw} usado`, diskPercent > 85 ? 'fail' : diskPercent > 70 ? 'warn' : 'ok');
-                setOps('opsUptime', `${formatUptime(metrics.uptime_seconds)} | load ${metrics.load_avg || 'N/D'}`, 'ok');
-            } catch (error) {
-                setOps('opsMemory', 'métrica indisponível', 'warn');
-                setOps('opsDisk', 'métrica indisponível', 'warn');
-                setOps('opsUptime', 'métrica indisponível', 'warn');
-            }
-        }
-
-        function renderEmptyState(title, detail) {
-            return `<div class="empty-state"><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
-        }
-
-        function renderPlaceholderRows(rows = demoSignals) {
-            return rows.map(item => `
-                <div class="placeholder-row">
-                    <span>${esc(item.label)}</span>
-                    <strong style="color:${item.tone || 'var(--cyan)'}">${esc(item.value)}</strong>
-                </div>
-            `).join('');
+        function translateStatus(s) {
+            return { 'NEW': 'NOVO', 'DETECTED': 'DETECTADO', 'RESOLVED': 'RESOLVIDO' }[String(s || '').toUpperCase()] || s;
         }
 
         async function apiRequest(path, method = 'GET', body = null) {
             try {
-                const response = await fetch(`${API_ORIGIN}${path}`, {
-                    method,
-                    cache: 'no-store',
-                    headers: {
-                        ...authHeaders(),
-                        ...(body ? { 'Content-Type': 'application/json' } : {})
-                    },
-                    body: body ? JSON.stringify(body) : null
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                return response.json();
-            } catch (error) {
-                if (apiState.online) setApiStatus('degraded', 'API degraded');
-                return null;
-            }
-        }
-
-        function getSeverity(riskValue) {
-            if (riskValue >= 90) return 'critical';
-            if (riskValue >= 70) return 'high';
-            if (riskValue >= 50) return 'medium';
-            return 'low';
-        }
-
-        function getSeverityColor(severityValue) {
-            switch (severityValue) {
-                case 'low': return '#22c55e';
-                case 'medium': return '#facc15';
-                case 'high': return '#ff9f43';
-                case 'critical':
-                default: return '#ef4444';
-            }
-        }
-
-        function normalizeSeverityLabel(value) {
-            const normalized = String(value || '').toLowerCase();
-            if (normalized === 'low' || normalized === 'medium' || normalized === 'high' || normalized === 'critical') return normalized;
-            return 'low';
-        }
-
-        function severity(alert) {
-            return getSeverity(risk(alert));
-        }
-
-        function socAction(alert) {
-            if (alert.simulated_block) return ['BLOQUEIO RECOMENDADO', 'bloqueio'];
-            if (risk(alert) >= 70 || alert.threat_intel_match || Number(alert.occurrence_count || 0) > 1) return ['INVESTIGANDO', 'investigando'];
-            return ['MONITORADO', 'monitorado'];
-        }
-
-        function chooseOrigin(alert) {
-            const direct = origins.find(item => item.ip === alert.ip);
-            if (direct) return direct;
-            const sum = String(alert.ip || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-            return origins[sum % origins.length];
-        }
-
-        function animateAttack(alert) {
-            const origin = chooseOrigin(alert);
-            const dx = destination.x - origin.x;
-            const dy = destination.y - origin.y;
-            const len = Math.sqrt(dx * dx + dy * dy);
-            const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-            const sev = severity(alert);
-            const line = document.createElement('div');
-            line.className = 'attack-line';
-            line.style.setProperty('--x1', `${origin.x}%`);
-            line.style.setProperty('--y1', `${origin.y}%`);
-            line.style.setProperty('--len', `${len}%`);
-            line.style.setProperty('--angle', `${angle}deg`);
-            line.style.setProperty('--line-color', getSeverityColor(sev));
-            el('lines').appendChild(line);
-            setTimeout(() => line.remove(), 2400);
-            el('mapLast').textContent = `${origin.country} / ${origin.city} -> Brasil / Salvador | ${alert.status || 'N/D'}`;
-        }
-
-        function renderStaticPoints(alerts) {
-            const latestByOrigin = new Map();
-            alerts.slice(0, 80).forEach(alert => latestByOrigin.set(chooseOrigin(alert).city, alert));
-
-            const originHtml = origins.map(origin => {
-                const alert = latestByOrigin.get(origin.city) || {};
-                const cls = severity(alert) === 'critical' ? 'critical' : '';
-                const tip = `${origin.country} / ${origin.city}\nIP: ${alert.ip || origin.ip}\nRisco: ${risk(alert)}\nStatus: ${alert.status || 'Sem alerta ativo'}\nFonte TI: ${alert.threat_source || 'N/D'}`;
-                return `<div class="map-point ${cls}" style="--x:${origin.x}%;--y:${origin.y}%;" data-tip="${esc(tip)}"><span class="country-label">${esc(origin.country)}</span></div>`;
-            }).join('');
-
-            const destTip = `${destination.country} / ${destination.city}\nDestino protegido\nStatus: SOC ativo`;
-            el('points').innerHTML = originHtml + `<div class="map-point destination" style="--x:${destination.x}%;--y:${destination.y}%;" data-tip="${esc(destTip)}"><span class="country-label">Salvador</span></div>`;
-        }
-
-        function updateCards(alerts) {
-            const totalOccurrences = alerts.reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
-            const sortedByRisk = alerts.slice().sort((a, b) => risk(b) - risk(a));
-            const topAlert = sortedByRisk[0] || {};
-            const replayOccurrences = alerts.filter(a => a.is_replay_event || a.replay_id || a.is_demo).reduce((sum, alert) => sum + Number(alert.occurrence_count || 1), 0);
-            const severityCounts = alerts.reduce((acc, alert) => {
-                const key = String(alert.severity || getSeverity(risk(alert))).toUpperCase();
-                acc[key] = (acc[key] || 0) + 1;
-                return acc;
-            }, {});
-            const dominantSeverity = Object.entries(severityCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'LOW';
-
-            el('cardLabelTotal').textContent = 'Incidentes abertos';
-            el('cardLabelCritical').textContent = 'Incidentes críticos';
-            el('cardLabelIps').textContent = 'IPs envolvidos';
-            el('cardLabelBlocks').textContent = 'Maior score';
-            el('cardLabelTi').textContent = 'MITRE dominante';
-
-            const uniqueIps = new Set(alerts.map(a => a.source_ip || a.ip).filter(Boolean)).size;
-            const simulatedBlocks = alerts.filter(a => a.simulated_block).length;
-            const tiOccurrences = alerts.filter(a => a.threat_intel_match).length;
-            el('totalEventos').textContent = totalOccurrences;
-            el('eventosCriticos').textContent = alerts.filter(a => String(a.severity || '').toUpperCase() === 'CRITICAL').length;
-            el('ipsUnicos').textContent = uniqueIps;
-            el('bloqueios').textContent = risk(topAlert);
-            el('tiMatches').textContent = Object.entries(alerts.reduce((acc, alert) => {
-                const key = alert.mitre_id || 'N/D';
-                acc[key] = (acc[key] || 0) + 1;
-                return acc;
-            }, {})).sort((a, b) => b[1] - a[1])[0]?.[0] || dominantSeverity;
-            el('lastReplayCard').textContent = alerts.find(a => a.replay_id)?.replay_id || (replayOccurrences ? 'REPLAY' : 'N/D');
-        }
-
-        function pulseCards() {
-            document.querySelectorAll('.card').forEach(card => {
-                card.classList.remove('pulse');
-                void card.offsetWidth;
-                card.classList.add('pulse');
-                setTimeout(() => card.classList.remove('pulse'), 2600);
-            });
-        }
-
-        function applyDemoCardBoost(payload) {
-            const eventsCreated = Number(payload.events_created || 0);
-            const criticalCreated = (payload.alerts || []).filter(alert => risk(alert) >= 95 || alert.simulated_block || alert.threat_intel_match).length;
-            const tiCreated = (payload.alerts || []).filter(alert => alert.threat_intel_match).length;
-            const simulatedBlocks = (payload.alerts || []).filter(alert => alert.simulated_block).length;
-            const current = id => Number.parseInt(el(id).textContent, 10) || 0;
-            el('totalEventos').textContent = current('totalEventos') + eventsCreated;
-            el('eventosCriticos').textContent = payload.primary_attacker?.ip || el('eventosCriticos').textContent;
-            el('ipsUnicos').textContent = Math.max(current('ipsUnicos'), ...((payload.alerts || []).map(risk)));
-            el('bloqueios').textContent = 'CRITICAL';
-            el('tiMatches').textContent = current('tiMatches') + eventsCreated;
-        }
-
-        function applyClientFilters(alerts) {
-            const term = el('searchInput').value.trim().toLowerCase();
-            const severityValue = el('severityFilter').value;
-            const sourceValue = el('sourceFilter').value;
-            const blockValue = el('blockFilter').value;
-
-            return alerts.filter(alert => {
-                const currentSeverity = severity(alert);
-                if (severityValue !== 'all' && currentSeverity !== severityValue) return false;
-
-                const source = alert.threat_source || 'none';
-                if (sourceValue !== 'all' && source !== sourceValue) return false;
-
-                if (blockValue === 'true' && !alert.simulated_block) return false;
-                if (blockValue === 'false' && alert.simulated_block) return false;
-
-                if (!term) return true;
-                const haystack = [
-                    alert.ip,
-                    alert.status,
-                    alert.event_type,
-                    alert.service,
-                    alert.correlation_key,
-                    alert.correlation_reason,
-                    alert.occurrence_count,
-                    alert.first_seen,
-                    alert.last_seen,
-                    alert.aggregated,
-                    Array.isArray(alert.ports) ? alert.ports.join(' ') : alert.ports,
-                    Array.isArray(alert.services) ? alert.services.join(' ') : alert.services,
-                    Array.isArray(alert.event_types) ? alert.event_types.join(' ') : alert.event_types,
-                ].join(' ').toLowerCase();
-                return haystack.includes(term);
-            });
-        }
-
-        function renderAll(alerts) {
-            visibleAlerts = applyClientFilters(alerts);
-            document.body.classList.toggle('history-mode', dashboardMode === 'historico');
-            updateCards(visibleAlerts);
-            updateThreatLevel(visibleAlerts);
-            updateEventsChart(visibleAlerts);
-            renderAnalytics(visibleAlerts);
-            renderStaticPoints(visibleAlerts);
-            renderFeed(visibleAlerts);
-        }
-
-        function updateThreatLevel(alerts) {
-            const maxRisk = Math.max(0, ...alerts.slice(0, 50).map(risk));
-            const hasCritical = alerts.slice(0, 20).some(a => severity(a) === 'critical');
-            const level = hasCritical || maxRisk >= 95 ? 'CRITICAL' : maxRisk >= 80 ? 'HIGH' : maxRisk >= 50 ? 'MEDIUM' : 'LOW';
-            el('threatLevel').textContent = level;
-            el('threatLevel').className = `level ${level.toLowerCase()}`;
-            el('criticalBanner').classList.toggle('show', level === 'CRITICAL');
-        }
-
-        function updateEventsChart(alerts) {
-            const selectedRange = el('rangeSelect').value;
-            const now = new Date();
-            const rangeHours = selectedRange === '1h' ? 1 : selectedRange === '24h' ? 24 : selectedRange === '15m' ? 0.25 : 5 / 60;
-            const bucketMs = selectedRange === '1h' ? 5 * 60 * 1000 : selectedRange === '24h' ? 60 * 60 * 1000 : 60 * 1000;
-            const start = new Date(now.getTime() - rangeHours * 60 * 60 * 1000);
-            const buckets = [];
-            for (let cursor = new Date(start); cursor <= now; cursor = new Date(cursor.getTime() + bucketMs)) {
-                buckets.push({ start: new Date(cursor), low: 0, medium: 0, high: 0, critical: 0, count: 0 });
-            }
-            alerts.forEach(alert => {
-                const ts = new Date(alert.ts || alert.timestamp || alert.first_seen || Date.now());
-                if (Number.isNaN(ts.getTime()) || ts < start) return;
-                const index = Math.min(buckets.length - 1, Math.max(0, Math.floor((ts - start) / bucketMs)));
-                const count = Number(alert.occurrence_count || 1);
-                const sev = normalizeSeverityLabel(alert.severity || getSeverity(risk(alert)));
-                buckets[index].count += count;
-                buckets[index][sev] += count;
-            });
-            const visibleBuckets = buckets.slice(-(selectedRange === '24h' ? 24 : 16));
-            const labels = visibleBuckets.map(bucket => bucket.start.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-            const values = visibleBuckets.map(bucket => bucket.count);
-            const criticalValues = visibleBuckets.map(bucket => bucket.critical);
-
-            if (!chart) {
-                chart = new Chart(el('eventsChart'), {
-                    type: 'line',
-                    data: { labels, datasets: [
-                        { label: 'Eventos', data: values, borderColor: '#65e7ff', backgroundColor: 'rgba(101,231,255,0.10)', fill: true, tension: 0.28 },
-                        { label: 'Critical', data: criticalValues, borderColor: '#ff405d', backgroundColor: 'rgba(255,64,93,0.08)', fill: false, tension: 0.28 }
-                    ] },
-                    options: chartOptions()
-                });
-                return;
-            }
-            chart.data.labels = labels;
-            chart.data.datasets[0].data = values;
-            chart.data.datasets[1].data = criticalValues;
-            chart.update('none');
-        }
-
-        function chartOptions() {
-            return {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { labels: { color: '#e7f1ff' } } },
-                scales: {
-                    x: { ticks: { color: '#8fa5ba' }, grid: { color: 'rgba(101,231,255,0.08)' } },
-                    y: { ticks: { color: '#8fa5ba', precision: 0 }, grid: { color: 'rgba(101,231,255,0.08)' }, beginAtZero: true }
+                let response = await fetch(`${API_ORIGIN}${path}`, { method, cache: 'no-store', headers: { ...authHeaders(), ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : null });
+                if (response.status === 401 && session?.refresh_token) {
+                    if (await refreshSession()) return apiRequest(path, method, body);
                 }
-            };
+                return response.ok ? response.json() : null;
+            } catch (e) { return null; }
         }
 
-        function renderAnalytics(alerts) {
-            const byIp = {};
-            const byPort = {};
-            const byType = {};
-
-            alerts.forEach(alert => {
-                const weight = Number(alert.occurrence_count || 1);
-                if (alert.ip) {
-                    byIp[alert.ip] ||= { count: 0, riskSum: 0 };
-                    byIp[alert.ip].count += weight;
-                    byIp[alert.ip].riskSum += risk(alert) * weight;
-                }
-                const ports = Array.isArray(alert.ports) && alert.ports.length ? alert.ports : [alert.port];
-                ports.filter(Boolean).forEach(port => {
-                    byPort[port] = (byPort[port] || 0) + weight;
-                });
-                const types = Array.isArray(alert.event_types) && alert.event_types.length ? alert.event_types : [alert.event_type || 'unknown'];
-                types.filter(Boolean).forEach(type => {
-                    byType[type] = (byType[type] || 0) + weight;
-                });
-            });
-
-            const ipRows = Object.entries(byIp);
-            if (!ipRows.length) {
-                el('avgRiskList').innerHTML = renderPlaceholderRows([
-                    { label: '10.0.1.237', value: 'baseline 12', tone: 'var(--green)' },
-                    { label: '203.0.113.10', value: 'observado 0', tone: 'var(--cyan)' },
-                    { label: '198.51.100.88', value: 'sem IOC', tone: 'var(--muted)' }
-                ]);
-                el('rankFreq').innerHTML = renderPlaceholderRows([
-                    { label: 'janela atual', value: 'sem pico', tone: 'var(--green)' },
-                    { label: 'eventos demo', value: 'prontos', tone: 'var(--cyan)' }
-                ]);
-                el('topPortsList').innerHTML = renderPlaceholderRows([
-                    { label: 'porta 80', value: 'pública', tone: 'var(--green)' },
-                    { label: 'porta 443', value: 'TLS', tone: 'var(--cyan)' },
-                    { label: '5000/5432/6379', value: 'fechadas', tone: 'var(--yellow)' }
-                ]);
-            }
-            el('avgRiskList').innerHTML = ipRows
-                .map(([ip, data]) => [ip, Math.round(data.riskSum / data.count)])
-                .sort((a, b) => b[1] - a[1]).slice(0, 6)
-                .map(([ip, avg]) => `<div class="rank-item"><span>${esc(ip)}</span><strong>${avg}</strong></div>`).join('') || el('avgRiskList').innerHTML;
-
-            el('rankFreq').innerHTML = ipRows
-                .sort((a, b) => b[1].count - a[1].count).slice(0, 6)
-                .map(([ip, data]) => `<div class="rank-item"><span>${esc(ip)}</span><strong>${data.count}</strong></div>`).join('') || el('rankFreq').innerHTML;
-
-            el('topPortsList').innerHTML = Object.entries(byPort)
-                .sort((a, b) => b[1] - a[1]).slice(0, 6)
-                .map(([port, count]) => `<div class="rank-item"><span>porta ${esc(port)}</span><strong>${count}</strong></div>`).join('') || el('topPortsList').innerHTML;
-
-            const labels = Object.keys(byType).slice(0, 8);
-            const values = labels.map(label => byType[label]);
-            if (!labels.length) {
-                labels.push('baseline', 'demo-ready', 'sem-alerta');
-                values.push(1, 1, 1);
-            }
-            if (!typeChart) {
-                typeChart = new Chart(el('typeChart'), {
-                    type: 'doughnut',
-                    data: { labels, datasets: [{ data: values, backgroundColor: ['#65e7ff', '#ff405d', '#ffd166', '#22e68b', '#ff9f43', '#8fa5ba', '#b794f4', '#38bdf8'] }] },
-                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#e7f1ff' } } } }
-                });
-                return;
-            }
-            typeChart.data.labels = labels;
-            typeChart.data.datasets[0].data = values;
-            typeChart.update('none');
-        }
-
-        async function refreshIncidents() {
+        async function refreshSession() {
             try {
-                const response = await fetch(INCIDENTS_URL, { cache: 'no-store', headers: authHeaders() });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const payload = await response.json();
-                const incidents = payload.data || [];
-                const statusFilter = el('incidentStatusFilter')?.value || 'all';
-                const severityFilter = el('incidentSeverityFilter')?.value || 'all';
-                const term = (el('incidentSearchInput')?.value || '').trim().toLowerCase();
-                const filtered = incidents.filter(incident => {
-                    if (statusFilter !== 'all' && incident.status !== statusFilter) return false;
-                    if (severityFilter !== 'all' && incident.severity !== severityFilter) return false;
-                    if (!term) return true;
-                    const haystack = [
-                        incident.incident_id,
-                        incident.title,
-                        incident.status,
-                        incident.severity,
-                        incident.source_ip,
-                        ...(incident.source_ips || []),
-                        ...(incident.correlation_reasons || []),
-                        ...(incident.mitre_techniques || []).map(item => `${item.id} ${item.name} ${item.tactic}`)
-                    ].join(' ').toLowerCase();
-                    return haystack.includes(term);
-                });
-                const openStatuses = new Set(['NEW','DETECTED','TRIAGED','INVESTIGATING','CONTAINED']);
-                const allIps = new Set(incidents.flatMap(item => item.source_ips || [item.source_ip]).filter(Boolean));
-                const dominantMitre = Object.entries(incidents.flatMap(item => item.mitre_techniques || []).reduce((acc, mitre) => {
-                    const key = mitre.id || 'N/D';
-                    acc[key] = (acc[key] || 0) + 1;
-                    return acc;
-                }, {})).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/D';
-                const lastReplay = incidents.flatMap(item => item.replay_ids || []).filter(Boolean)[0] || 'N/D';
-                el('totalEventos').textContent = incidents.filter(item => openStatuses.has(item.status)).length;
-                el('eventosCriticos').textContent = incidents.filter(item => item.severity === 'CRITICAL').length;
-                el('ipsUnicos').textContent = allIps.size;
-                el('bloqueios').textContent = Math.max(0, ...incidents.map(item => Number(item.max_score || 0)));
-                el('tiMatches').textContent = dominantMitre;
-                el('lastReplayCard').textContent = lastReplay;
-                el('incidentsStatus').textContent = `${filtered.length}/${incidents.length} INCIDENTES`;
-                el('incidentsList').innerHTML = filtered.slice(0, 10).map(incident => `
-                    <div class="rank-item clickable-row" data-incident-id="${esc(incident.incident_id)}">
-                        <span>
-                            <strong>${esc(incident.title)}</strong><br>
-                            <span class="muted">${esc(incident.incident_id)} | ${esc(incident.status)} | ${esc(incident.severity)} | IPs: ${esc((incident.source_ips || [incident.source_ip]).filter(Boolean).length)} | eventos: ${esc(incident.event_count)} | MITRE: ${esc((incident.mitre_techniques || []).map(item => item.id).join(', ') || 'N/D')}</span>
-                        </span>
-                        <strong>${esc(incident.max_score)}</strong>
-                    </div>
-                `).join('') || renderEmptyState('Nenhum incidente ativo', 'Fila limpa no período selecionado. Replays e eventos reais aparecerão aqui.');
-            } catch (error) {
-                el('incidentsStatus').textContent = apiState.online ? 'DEGRADED' : 'CHECANDO API';
-                el('incidentsList').innerHTML = renderPlaceholderRows([
-                    { label: 'incidentes', value: 'aguardando API', tone: 'var(--yellow)' },
-                    { label: 'último estado local', value: apiState.online ? 'API parcial' : 'sem resposta', tone: apiState.online ? 'var(--cyan)' : 'var(--orange)' }
-                ]);
-            }
+                const res = await fetch(AUTH_REFRESH_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: session?.refresh_token }) });
+                if (res.ok) { session = await res.json(); localStorage.setItem('sentinelaSession', JSON.stringify(session)); return true; }
+            } catch (e) {}
+            return false;
         }
 
-        async function openIncidentDetail(incidentId) {
-            el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Incidente</div><div><span class="skeleton-line"></span></div></div>';
-            el('drawerBackdrop').classList.add('open');
-            el('detailDrawer').classList.add('open');
+        function setPill(id, text, className) { const n = el(id); if (n) { n.textContent = text; n.className = `status-pill ${className}`; } }
+
+        async function refreshOperationalStatus() {
             try {
-                const response = await fetch(`${INCIDENTS_URL}/${encodeURIComponent(incidentId)}`, { cache: 'no-store', headers: authHeaders() });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const incident = await response.json();
-                renderIncidentDetail(incident);
-            } catch (error) {
-                el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Erro</div><div>Falha ao carregar incidente.</div></div>';
-            }
-        }
-
-        function renderIncidentDetail(incident) {
-            const mitres = (incident.mitre_techniques || []).map(item => `${item.id} - ${item.name} (${item.tactic})`).join(', ') || 'N/D';
-            const timeline = (incident.timeline || []).slice(-16).map(item => `${item.local_time || new Date(item.timestamp).toLocaleString('pt-BR')} | ${item.phase || item.stage} | ${item.source_ip || 'N/D'} | ${item.event_type} | ${item.severity} | score ${item.score} | ${item.mitre_id || 'N/D'}`).join('\n');
-            const alerts = (incident.related_alerts || []).slice(0, 12).map(item => `${item.local_time || item.timestamp} | ${item.source_ip || 'N/D'} -> ${item.target_host || item.target_ip || 'N/D'}:${item.target_port || 'N/D'} | ${item.event_type} | ${item.severity} | score ${item.score} | regra ${item.internal_rule_id || 'N/D'}`).join('\n') || 'N/D';
-            const recommendations = (incident.recommendations || []).join('\n');
-            const sourceIps = (incident.source_ips || [incident.source_ip]).filter(Boolean).join(', ') || 'N/D';
-            const reasons = (incident.correlation_reasons || []).join(', ') || 'N/D';
-            const assets = (incident.affected_assets || []).slice(0, 8).map(item => `${item.target_host || item.target_ip || 'N/D'}:${item.target_port || 'N/D'} | ${item.target_service || 'N/D'} | criticidade ${item.asset_criticality || 'N/D'} | ${item.business_impact || 'impacto N/D'}`).join('\n') || 'N/D';
-            const evidence = (incident.evidence || []).slice(0, 10).map(item => `${item.rule || 'regra N/D'} | eventos ${item.event_count || 'N/D'} | ${item.first_seen || 'N/D'} -> ${item.last_seen || 'N/D'} | ${item.severity_reason || item.log_summary || 'evidencia N/D'}`).join('\n') || 'N/D';
-            const audit = (incident.audit_log || []).slice(0, 6).map(item => `${item.changed_at ? new Date(item.changed_at).toLocaleString('pt-BR') : 'N/D'} | ${item.field_changed}: ${item.old_value || 'vazio'} -> ${item.new_value || 'vazio'} | ${item.changed_by || 'system'}`).join('\n') || 'Sem alterações manuais.';
-            el('detailContent').innerHTML = `
-                <div class="detail-row"><div class="detail-label">Incidente</div><div>${esc(incident.incident_id)} | ${esc(incident.title)}</div></div>
-                <div class="detail-row"><div class="detail-label">Tipo / Lifecycle</div><div>${esc((incident.source_ips || []).length > 1 ? 'campaign' : 'incident')} | ${esc(incident.lifecycle_stage || incident.status)} | status ${esc(incident.status)}</div></div>
-                <div class="detail-row"><div class="detail-label">Severidade / Score</div><div>${esc(incident.severity)} | score ${esc(incident.max_score)}<br>${esc(incident.score_explanation || '')}</div></div>
-                <div class="detail-row"><div class="detail-label">IP principal</div><div><button class="button ip-link" data-source-ip="${esc(incident.source_ip)}" type="button">${esc(incident.source_ip)}</button></div></div>
-                <div class="detail-row"><div class="detail-label">IPs envolvidos</div><div>${esc(sourceIps)}</div></div>
-                <div class="detail-row"><div class="detail-label">Ativos afetados</div><div style="white-space:pre-wrap">${esc(assets)}</div></div>
-                <div class="detail-row"><div class="detail-label">Correlação</div><div>${esc(reasons)}</div></div>
-                <div class="detail-row"><div class="detail-label">MITRE ATT&CK</div><div>${esc(mitres)}</div></div>
-                <div class="detail-row"><div class="detail-label">Resposta recomendada</div><div>${esc(incident.recommended_action || 'N/D')}<br>${esc(incident.response_playbook || 'N/D')} | ${esc(incident.execution_mode || 'simulation')} / ${esc(incident.execution_status || 'not_executed')}</div></div>
-                <div class="detail-row"><div class="detail-label">Resumo do Analista</div><div>${esc(incident.human_summary)}</div></div>
-                <div class="detail-row"><div class="detail-label">Evidências</div><div style="white-space:pre-wrap">${esc(evidence)}</div></div>
-                <div class="detail-row"><div class="detail-label">Alertas relacionados</div><div style="white-space:pre-wrap">${esc(alerts)}</div></div>
-                <div class="detail-row"><div class="detail-label">Linha do Tempo</div><div style="white-space:pre-wrap">${esc(timeline)}</div></div>
-                <div class="detail-row"><div class="detail-label">Audit log</div><div style="white-space:pre-wrap">${esc(audit)}</div></div>
-                <div class="detail-row"><div class="detail-label">Próximas ações sugeridas</div><div style="white-space:pre-wrap">${esc(recommendations)}</div></div>
-                <div class="detail-row">
-                    <div class="detail-label">Atualizar incidente</div>
-                    <div class="incident-form">
-                        <select class="select" id="incidentStatusSelect">
-                            ${['DETECTED','TRIAGED','INVESTIGATING','CONTAINED','RESOLVED','FALSE_POSITIVE','CLOSED'].map(status => `<option value="${status}" ${incident.status === status ? 'selected' : ''}>${status}</option>`).join('')}
-                        </select>
-                        <input id="incidentAssignedTo" value="${esc(incident.assigned_to || '')}" placeholder="Responsável">
-                        <input id="incidentSocAction" value="${esc(incident.soc_action || 'investigação simulada')}" placeholder="Ação SOC simulada">
-                        <textarea id="incidentNotes" placeholder="Notas do analista">${esc(incident.analyst_notes || '')}</textarea>
-                        <div id="copilot-container" style="margin-top: 15px; border: 1px solid var(--purple); padding: 10px; border-radius: 6px; background: rgba(168, 85, 247, 0.05); display: none;">
-                            <h4 style="color: var(--purple); font-size: 0.8rem; margin-bottom: 5px;">🤖 SOC COPILOT INSIGHT</h4>
-                            <div id="copilot-text" style="font-size: 0.75rem; color: #fff; line-height: 1.4;"></div>
-                        </div>
-                        <button class="button" onclick="invokeCopilot('${esc(incident.incident_id)}')" style="border-color: var(--purple); color: var(--purple); margin-top: 10px;">Invocar Copilot AI</button>
-                        <button class="button" id="saveIncidentButton" type="button" data-incident-id="${esc(incident.incident_id)}">Salvar incidente</button>
-                        <button class="button" id="exportIncidentPdfButton" type="button" data-incident-id="${esc(incident.incident_id)}">Exportar PDF</button>
-                        <button class="button" id="exportIncidentButton" type="button" data-incident-id="${esc(incident.incident_id)}">Exportar Markdown</button>
-                    </div>
-                </div>
-            `;
-        }
-
-        async function invokeCopilot(id) {
-            const container = el('copilot-container');
-            const textBox = el('copilot-text');
-            container.style.display = 'block';
-            textBox.innerHTML = '🤖 <em>O Copilot está analisando o incidente, os grafos e as táticas do MITRE...</em>';
-            
-            try {
-                const data = await apiRequest(`/copilot/incident/${id}`);
-                const insight = data.llm_insight;
-                textBox.innerHTML = `
-                    <p><strong>Resumo:</strong> ${esc(insight.summary)}</p>
-                    <p class="mt-2"><strong>Contexto MITRE:</strong> ${esc(insight.mitre_explanation)}</p>
-                    <p class="mt-2"><strong>Sugestão de Resposta:</strong> <span style="color:var(--green)">${esc(insight.response_suggestion)}</span></p>
-                    <p class="mt-2"><strong>Hunting Query (Cypher):</strong> <code style="background:#000; padding:2px 4px; border-radius:3px;">${esc(insight.hunting_query)}</code></p>
-                    <p class="mt-2"><strong>Blast Radius:</strong> ${esc(insight.blast_radius_analysis)}</p>
-                `;
-            } catch (e) {
-                textBox.innerHTML = '<span style="color:var(--red)">O Copilot encontrou um erro na análise cerebral.</span>';
-            }
-        }
-
-        async function saveIncidentUpdate(incidentId) {
-            const payload = {
-                status: el('incidentStatusSelect').value,
-                assigned_to: el('incidentAssignedTo').value,
-                soc_action: el('incidentSocAction').value,
-                analyst_notes: el('incidentNotes').value
-            };
-            const response = await fetch(`${INCIDENTS_URL}/${encodeURIComponent(incidentId)}`, {
-                method: 'PATCH',
-                cache: 'no-store',
-                headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const updated = await response.json();
-            renderIncidentDetail(updated);
-            refreshIncidents();
-        }
-
-        function exportIncidentReport(incidentId) {
-            const button = el('exportIncidentButton');
-            if (button) {
-                button.disabled = true;
-                button.textContent = 'Gerando Markdown...';
-            }
-            window.open(`${REPORT_URL}/${encodeURIComponent(incidentId)}.md`, '_blank', 'noopener');
-            setTimeout(() => {
-                if (button) {
-                    button.disabled = false;
-                    button.textContent = 'Markdown gerado';
-                    setTimeout(() => { button.textContent = 'Exportar Markdown'; }, 1400);
+                const ready = await fetch(READY_URL, { headers: authHeaders() });
+                setPill('apiStatus', 'API', ready.ok ? 'online' : 'degraded');
+                const res = await fetch(HOST_METRICS_URL);
+                if (res.ok) {
+                    const m = await res.json();
+                    el('opsMemoryValue').textContent = `${m.memory_mb?.available || '--'}MB`;
+                    el('opsUptimeValue').textContent = `${Math.round(m.load_avg || 0)}%`;
                 }
-            }, 500);
-        }
-
-        function exportIncidentPdf(incidentId) {
-            const button = el('exportIncidentPdfButton');
-            if (button) {
-                button.disabled = true;
-                button.textContent = 'Gerando PDF...';
-            }
-            window.open(`${REPORT_URL}/${encodeURIComponent(incidentId)}.pdf`, '_blank', 'noopener');
-            setTimeout(() => {
-                if (button) {
-                    button.disabled = false;
-                    button.textContent = 'PDF gerado';
-                    setTimeout(() => { button.textContent = 'Exportar PDF'; }, 1400);
-                }
-            }, 500);
+            } catch (e) {}
         }
 
         function renderFeed(alerts) {
-            if (!alerts.length) {
-                el('feedBody').innerHTML = `
-                    <tr>
-                        <td class="mono" style="border-left:4px solid var(--green); color:var(--green)">standby</td>
-                        <td class="mono">SOC local<br><span class="muted">-> sentinela-web:443<br>tenant default</span></td>
-                        <td><span class="tag low">LOW</span><br><span class="muted">baseline</span></td>
-                        <td class="mono" style="color:var(--green)">0</td>
-                        <td class="mono"><div class="tag low">Sem incidente ativo</div><div class="muted">janela limpa</div></td>
-                        <td class="mono">MITRE: N/D<br><span class="muted">Regras prontas para replay</span></td>
-                        <td>${renderEmptyState('Sem alertas no período', 'Telemetria online; execute um replay para popular o feed.')}</td>
-                        <td><span class="action monitorado">MONITORADO</span><br><span class="muted">simulation / not_executed</span></td>
-                    </tr>`;
-                return;
-            }
-            const historyMode = dashboardMode === 'historico';
-            el('feedHeadTime').textContent = historyMode ? 'Timestamp' : 'Hora';
-            el('feedHeadStatus').textContent = historyMode ? 'Tipo de alerta' : 'Severidade';
-            el('feedHeadRisk').textContent = 'Score';
-            el('feedHeadConsolidation').textContent = historyMode ? 'Severidade' : 'Correlação';
-            el('feedHeadService').textContent = 'MITRE / Regra';
-            el('feedHeadIntel').textContent = historyMode ? 'Evidência/Correlação' : 'Evidência';
-            el('feedHeadAction').textContent = historyMode ? 'Replay' : 'Playbook';
-            el('feedBody').innerHTML = alerts.slice(0, 80).map(alert => {
-                const sev = getSeverity(risk(alert));
-                const color = getSeverityColor(sev);
-                const glow = sev === 'critical' ? 'box-shadow:0 0 8px rgba(239, 68, 68, 0.6);' : sev === 'medium' ? 'box-shadow:0 0 6px rgba(250, 204, 21, 0.22);' : '';
-                const [action, actionClass] = socAction(alert);
-                const occurrenceCount = Number(alert.occurrence_count || 1);
-                const occurrenceLabel = occurrenceCount > 1 ? `x${occurrenceCount}` : 'x1';
-                const firstSeen = alert.first_seen ? new Date(alert.first_seen).toLocaleTimeString('pt-BR') : 'N/D';
-                const lastSeen = alert.last_seen ? new Date(alert.last_seen).toLocaleTimeString('pt-BR') : 'N/D';
-                const aggregated = alert.aggregated ? 'AGREGADO' : 'INDIVIDUAL';
-                const ports = Array.isArray(alert.ports) && alert.ports.length ? alert.ports.join(', ') : (alert.port ? String(alert.port) : 'N/D');
-                const services = Array.isArray(alert.services) && alert.services.length ? alert.services.join(', ') : (alert.service || 'N/D');
-                const eventTypes = Array.isArray(alert.event_types) && alert.event_types.length ? alert.event_types.join(', ') : (alert.event_type || 'N/D');
-                const consolidationClass = occurrenceCount > 1 ? (sev === 'critical' ? 'critical' : 'medium') : 'low';
-                const reasons = Array.isArray(alert.correlation_reasons) && alert.correlation_reasons.length
-                    ? alert.correlation_reasons.join('; ')
-                    : (Array.isArray(alert.reasons) && alert.reasons.length ? alert.reasons.join('; ') : (alert.correlation_reason || 'N/D'));
-                const mitre = `${alert.mitre_id || 'N/D'} ${alert.mitre_name || ''}`;
-                const target = `${alert.target_host || alert.target_ip || 'sentinela-local'}:${alert.target_port || alert.port || 'N/D'}`;
-                const asset = `${alert.asset_criticality || 'medium'} | ${alert.business_impact || 'impacto N/D'}`;
-                const rule = `${alert.internal_rule_id || 'SENTINELA'} - ${alert.internal_rule_name || alert.status || 'Regra interna'}`;
-                const playbook = alert.response_playbook || 'PB-SOC-001-triagem-alerta';
-                const execution = `${alert.execution_mode || 'simulation'} / ${alert.execution_status || 'not_executed'}`;
-                const ti = historyMode
-                    ? `<span class="muted">MITRE: ${esc(mitre)}<br>${esc(reasons)}</span>`
-                    : alert.threat_intel_match
-                    ? `<span class="ti">IOC local: ${esc(alert.threat_category || 'IOC')}</span><br><span class="muted">${esc(alert.score_explanation || reasons)}</span>`
-                    : `<span class="muted">${esc(alert.score_explanation || reasons)}</span>`;
-                const rowClass = (alert.is_replay_event || alert.replay_id || alert.is_demo) ? 'clickable-row replay-row' : 'clickable-row';
-                return `
-                    <tr class="${rowClass}" data-alert-id="${esc(alert.id)}">
-                        <td class="mono" style="border-left:4px solid ${color}; color:${color}">${esc(alert.ts ? new Date(alert.ts).toLocaleString('pt-BR') : 'N/D')}</td>
-                        <td class="mono">
-                            <button class="button ip-link" data-source-ip="${esc(alert.source_ip || alert.ip)}" type="button">${esc(alert.source_ip || alert.ip)}</button>
-                            ${alert.enrichment_geoip ? `<div class="muted" style="font-size:0.6rem; color:var(--cyan)">${esc(alert.enrichment_geoip.country)} (${esc(alert.enrichment_geoip.city)})</div>` : ''}
-                            ${alert.enrichment_threat?.abuse_score ? `<div style="color:${alert.enrichment_threat.abuse_score > 50 ? 'var(--red)' : 'var(--green)'}; font-size:0.6rem;">Abuse Score: ${alert.enrichment_threat.abuse_score}%</div>` : ''}
-                            <br><span class="muted">-> ${esc(target)}<br>${esc(asset)}<br>tenant ${esc(alert.tenant_id || 'default')}</span>
-                        </td>
-
-                        <td><span class="tag ${sev}" style="color:${color}; border-color:${color}; ${glow}">${esc(String(alert.severity || sev).toUpperCase())}</span><br><span class="muted">${esc(alert.alert_type || 'alert')}</span></td>
-                        <td class="mono" style="color:${color}">${risk(alert)}</td>
-                        <td class="mono">
-                            <div class="tag ${historyMode ? sev : consolidationClass}">${esc(historyMode ? String(alert.severity || sev).toUpperCase() : (occurrenceCount > 1 ? 'Incidente correlacionado' : 'Evento individual'))}</div>
-                            <div class="muted">${esc(firstSeen)} -> ${esc(lastSeen)}</div>
-                            <div class="muted">${esc(historyMode ? (alert.correlation_key || 'N/D') : eventTypes)}</div>
-                            <div class="muted">corr ${esc(alert.correlation_id || alert.event_id || 'N/D')}</div>
-                        </td>
-                        <td class="mono">MITRE: ${esc(mitre)}<br><span class="muted">${esc(rule)}<br>${esc(alert.correlation_rule || alert.correlation_key || 'N/D')}</span></td>
-                        <td>${ti}</td>
-                        <td><span class="action ${actionClass}">${historyMode ? esc(alert.replay_id || (alert.is_replay_event ? 'REPLAY' : 'N/D')) : esc(playbook)}</span><br><span class="muted">${esc(action)} | ${esc(execution)}</span></td>
-                    </tr>`;
-            }).join('');
-        }
-
-        function renderIncidentProgress(items) {
-            const steps = [
-                { key: 'detection', label: 'DETECÇÃO', active: false, completed: false },
-                { key: 'suspicion', label: 'SUSPEITA', active: false, completed: false },
-                { key: 'correlation', label: 'CORRELAÇÃO', active: false, completed: false },
-                { key: 'critical', label: 'CRITICAL', active: false, completed: false },
-                { key: 'response', label: 'RESPOSTA', active: false, completed: false },
-            ];
-
-            const hasEvents = (items || []).length > 0;
-            const hasSuspicion = (items || []).some(item => {
-                const text = `${item.stage || ''} ${item.event_type || ''} ${item.description || ''}`.toLowerCase();
-                return text.includes('brute force') || text.includes('suspeito');
+            const tbody = el('feedBody');
+            if (!alerts.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px;">Aguardando eventos...</td></tr>'; return; }
+            let lastTime = ''; let html = '';
+            alerts.slice(0, 40).forEach(a => {
+                const d = new Date(a.ts || a.timestamp);
+                const t = d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+                if (t !== lastTime) { html += `<tr><td colspan="6" class="time-sep">${t}</td></tr>`; lastTime = t; }
+                const sev = getSeverity(risk(a));
+                html += `<tr class="clickable-row" onclick="openIncidentDetail('${a.id||a.event_id}')"><td>${d.toLocaleTimeString('pt-BR')}</td><td>${esc(a.source_ip||a.ip)} &rarr; ${esc(a.target_host||'local')}</td><td><span class="tag ${sev}">${translateSeverity(sev)}</span></td><td>${risk(a)}</td><td>${esc(a.mitre_id||'N/D')}</td><td><span class="action">PLAYBOOK</span></td></tr>`;
             });
-            const hasCorrelation = (items || []).some(item => {
-                const text = `${item.stage || ''} ${item.description || ''}`.toLowerCase();
-                return text.includes('regra yaml') || text.includes('correlation');
-            });
-            const hasCritical = (items || []).some(item => normalizeSeverityLabel(item.severity) === 'critical' || risk(item) >= 80);
-            const hasResponse = (items || []).some(item => item.simulated_block);
-
-            const states = {
-                detection: hasEvents,
-                suspicion: hasSuspicion,
-                correlation: hasCorrelation,
-                critical: hasCritical,
-                response: hasResponse,
-            };
-
-            const highestIndex = [...steps].reverse().findIndex(step => states[step.key]);
-            const lastActiveIndex = highestIndex === -1 ? -1 : steps.length - 1 - highestIndex;
-
-            const container = el('incidentProgress');
-            if (!hasEvents) {
-                container.innerHTML = '';
-                return;
-            }
-
-            container.innerHTML = steps.map((step, index) => {
-                const active = states[step.key];
-                const completed = active && index < lastActiveIndex;
-                return `<div class="progress-step${active ? ' active' : ''}${completed ? ' completed' : ''}" data-step="${step.key}">${step.label}</div>`;
-            }).join('');
+            tbody.innerHTML = html;
         }
 
-        function renderIncidentTimeline(items) {
-            incidentTimeline = items || [];
-            el('incidentPanel').classList.toggle('show', incidentTimeline.length > 0);
-            renderIncidentProgress(incidentTimeline);
-            if (!incidentTimeline.length) {
-                el('incidentTimeline').innerHTML = '';
-                return;
-            }
-
-            el('incidentTimeline').innerHTML = incidentTimeline.map(item => {
-                const sev = normalizeSeverityLabel(item.severity || getSeverity(risk(item)));
-                const color = getSeverityColor(sev);
-                const time = item.timestamp ? new Date(item.timestamp).toLocaleTimeString('pt-BR') : '--:--:--';
-                const icon = timelineIcon(item.stage, item.event_type, sev);
-                const delay = (incidentTimeline.indexOf(item) * 120);
-                return `
-                    <div class="timeline-item ${esc(sev)}" style="animation-delay:${delay}ms; --severity-color:${color}; border-left-color:${color};">
-                        <div class="timeline-icon" aria-hidden="true" style="color:${color}">${icon}</div>
-                        <div class="timeline-time">${esc(time)}</div>
-                        <div>
-                            <div class="timeline-title">${esc(item.stage)}</div>
-                            <div class="timeline-desc">${esc(item.description)}</div>
-                            <div class="timeline-meta">${esc(item.local_time || time)} | ${esc(item.phase || 'N/D')} | ${esc(item.source_ip || item.ip)} | ${esc(item.event_type)} | score ${esc(item.score)} | ${esc(item.mitre_id || 'N/D')} ${item.replay_id ? '| replay ' + esc(item.replay_id) : ''}</div>
-                        </div>
-                        <span class="severity-badge ${sev}" style="color:${color}; border-color:${color}; ${sev === 'critical' ? 'box-shadow:0 0 8px rgba(239, 68, 68, 0.6);' : sev === 'medium' ? 'box-shadow:0 0 6px rgba(250, 204, 21, 0.22);' : ''}">${esc(String(item.severity || sev).toUpperCase())}</span>
-                    </div>`;
-            }).join('');
+        async function refreshEnterpriseTimeline(id) {
+            if (!id) return;
+            const data = await apiRequest(`/api/incidents/${id}/timeline`);
+            if (!data) return;
+            el('enterpriseTimeline').innerHTML = (data.timeline || []).slice(0, 15).map(item => `
+                <div class="timeline-compact-item ${getSeverity(item.accumulated_score)}">
+                    <div class="timeline-time">${new Date(item.timestamp).toLocaleTimeString('pt-BR')}</div>
+                    <div><div class="timeline-title">${esc(item.event_type)}</div><div class="muted">${esc(item.message)}</div></div>
+                    <div class="timeline-meta"><span class="tag low">${esc(item.mitre_technique || 'N/D')}</span></div>
+                </div>`).join('');
         }
 
-        function timelineIcon(stage, eventType, severityValue) {
-            const normalized = `${stage || ''} ${eventType || ''}`.toLowerCase();
-            if (normalized.includes('simulated_block')) return '🛡';
-            if (severityValue === 'critical' || normalized.includes('yaml') || normalized.includes('threat') || normalized.includes('critical')) return '🚨';
-            if (normalized.includes('suspeito') || normalized.includes('brute')) return '⚠️';
-            return '🔍';
-        }
-
-        function renderIncidentOverview(payload) {
-            const attacker = payload.primary_attacker || {};
-            const timeline = payload.timeline || [];
-            const first = timeline[0] || {};
-            const maxSeverity = attacker.max_severity || timeline.reduce((current, item) => item.severity === 'CRITICAL' ? 'CRITICAL' : current, 'MEDIUM');
-            el('attackerIp').textContent = attacker.ip || first.ip || '--';
-            el('attackerVector').textContent = attacker.initial_vector || first.event_type || '--';
-            el('attackerSeverity').textContent = maxSeverity;
-            el('attackerAction').textContent = attacker.soc_action || (payload.simulated_block ? 'Apenas bloqueio simulado' : 'Apenas monitoramento');
-            el('incidentSummaryText').textContent = payload.incident_summary || `Ataque controlado detectado a partir do IP ${first.ip || '--'}. Regras de correlação elevaram o incidente para nível CRÍTICO e registraram bloqueio simulado, sem execução de bloqueio real.`;
-        }
-
-        function showDemoError(message) {
-            el('incidentPanel').classList.add('show');
-            el('demoError').textContent = message || 'Falha ao executar simulação. Verifique autenticação ou API.';
-            el('demoError').classList.add('show');
-        }
-
-        function hideDemoError() {
-            el('demoError').classList.remove('show');
-        }
-
-        function setDashboardMode(mode) {
-            dashboardMode = mode;
-            demoOnlyMode = mode === 'demo';
-            el('demoModeButton').classList.toggle('active', mode === 'demo');
-            el('historyModeButton').classList.toggle('active', mode === 'historico');
-            el('incidentStatus').textContent = mode === 'demo' ? 'MODO DEMONSTRAÇÃO' : 'MODO HISTÓRICO';
-            seenIds = new Set();
-            renderAll(allAlerts);
-            refresh();
-        }
-
-        async function simulateAttack() {
-            const button = el('simulateAttackButton');
-            button.disabled = true;
-            button.textContent = 'Simulando...';
-
-            try {
-                const response = await fetch(DEMO_URL, {
-                    method: 'POST',
-                    cache: 'no-store',
-                    headers: authHeaders()
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const payload = await response.json();
-                hideDemoError();
-                dashboardMode = 'demo';
-                demoOnlyMode = true;
-                el('demoModeButton').classList.add('active');
-                el('historyModeButton').classList.remove('active');
-                renderIncidentOverview(payload);
-                renderIncidentTimeline(payload.timeline || []);
-                el('criticalBanner').classList.add('show');
-                el('incidentPanel').classList.add('highlight');
-                el('threatLevel').textContent = 'CRITICAL';
-                el('threatLevel').className = 'level critical';
-                pulseCards();
-                (payload.alerts || []).forEach(alert => animateAttack(alert));
-                await refresh();
-                applyDemoCardBoost(payload);
-                el('incidentStatus').textContent = `SIMULAÇÃO: ${payload.events_created || 0} EVENTOS`;
-                button.textContent = `Simulação: ${payload.events_created || 0} eventos`;
-            } catch (error) {
-                el('incidentStatus').textContent = 'FALHA NA SIMULAÇÃO';
-                showDemoError('Falha ao executar simulação. Verifique autenticação ou API.');
-            } finally {
-                button.disabled = false;
-                if (!button.textContent.startsWith('Simulação:')) button.textContent = 'Simular Ataque';
-            }
-        }
-
-        function refreshHeatmap() {
-            const container = el('mitre-heatmap');
-            const techniques = visibleAlerts.flatMap(alert => alert.mitre_id ? [alert.mitre_id] : []);
-            const values = techniques.length ? [...new Set(techniques)].slice(0, 8) : fallbackMitre;
-            container.innerHTML = values.map((item, index) => `
-                <span class="tag ${techniques.length ? 'medium' : 'low'}" title="${techniques.length ? 'observado' : 'baseline'}">${esc(item)}</span>
-            `).join('');
-        }
-
-        function refreshPendingActions() {
-            const container = el('pending-actions');
-            const actions = visibleAlerts
-                .filter(alert => risk(alert) >= 70 || alert.simulated_block)
-                .slice(0, 4)
-                .map(alert => [alert.response_playbook || 'PB-SOC-001', alert.execution_status || 'pendente simulado']);
-            const rows = actions.length ? actions : fallbackActions;
-            container.innerHTML = rows.map(([name, state]) => `
-                <div class="placeholder-row">
-                    <span>${esc(name)}</span>
-                    <strong style="color:${actions.length ? 'var(--yellow)' : 'var(--cyan)'}">${esc(state)}</strong>
-                </div>
-            `).join('');
-        }
-
-        async function refreshBilling() {
-            const data = await apiRequest('/saas/billing');
-            const container = el('billing-info');
-            if (!data || data.length === 0) {
-                container.innerHTML = renderPlaceholderRows([
-                    { label: 'tenant default', value: 'free tier', tone: 'var(--green)' },
-                    { label: 'eventos atuais', value: `${visibleAlerts.length} visíveis`, tone: 'var(--cyan)' },
-                    { label: 'custo estimado', value: 'R$ 0,00', tone: 'var(--green)' }
-                ]);
-                return;
-            }
-            container.innerHTML = data.map(record => `
-                <div style="margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 5px; font-size: 0.8rem;">
-                    <strong>${record.billing_period}:</strong> ${record.event_count} evts | <strong>R$ ${record.amount}</strong>
-                </div>
-            `).join('');
-        }
-
-        async function createTenant() {
-            const tid = el('new-tenant-id').value;
-            const tname = el('new-tenant-name').value;
-            if (!tid || !tname) return alert('Preencha ID e Nome');
-            const res = await apiRequest('/saas/tenants', 'POST', { tenant_id: tid, name: tname });
-            if (res?.status === 'success') {
-                alert(`Tenant criado! API Key: ${res.api_key}`);
-                el('new-tenant-id').value = ''; el('new-tenant-name').value = '';
-            } else alert('Erro ao criar tenant (permissão admin necessária)');
-        }
-
-        async function refreshGraphPaths() {
-            const data = await apiRequest('/graph/attack-paths');
-            const containers = document.querySelectorAll('#graph-paths');
-            const render = html => containers.forEach(container => { container.innerHTML = html; });
-            if (!data || data.length === 0) {
-                render(renderPlaceholderRows([
-                    { label: 'identity -> workload', value: 'sem abuso', tone: 'var(--green)' },
-                    { label: 'internet -> dashboard', value: 'HTTPS', tone: 'var(--cyan)' },
-                    { label: 'lateral movement', value: 'não observado', tone: 'var(--muted)' }
-                ]));
-                return;
-            }
-            render(data.map(path => {
-                const chain = path.nodes.map(n => `<span style="color:var(--purple)">${esc(n.address || n.name || n.id)}</span>`).join(' -> ');
-                return `
-                    <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; font-size: 0.8rem;">
-                        <strong>Trajetória:</strong> ${chain}<br>
-                        <span class="muted">Relacionamentos: ${path.relationships.join(', ')}</span>
-                    </div>
-                `;
-            }).join(''));
-        }
-
-        async function refreshAIScores() {
-            const data = visibleAlerts.filter(a => a.ai_anomaly_score > 0.6).slice(0, 5);
-            const container = el('ai-scores-list');
-            if (data.length === 0) {
-                container.innerHTML = renderPlaceholderRows([
-                    { label: 'baseline HTTP', value: 'normal', tone: 'var(--green)' },
-                    { label: 'event burst', value: '0 picos', tone: 'var(--cyan)' },
-                    { label: 'anomaly score', value: '< 60%', tone: 'var(--green)' }
-                ]);
-                return;
-            }
-            container.innerHTML = data.map(alert => `
-                <div style="font-size:0.75rem; margin-bottom:5px;">
-                    <span class="ip-link" data-source-ip="${esc(alert.ip)}">${esc(alert.ip)}</span>: 
-                    <strong style="color:var(--orange)">${(alert.ai_anomaly_score * 100).toFixed(0)}%</strong> anômalo
-                </div>
-            `).join('');
-        }
-
-        async function refreshSoarStatus() {
-            const data = await apiRequest('/soar/playbooks');
-            const container = el('soar-status');
-            if (!data || data.length === 0) {
-                container.innerHTML = renderPlaceholderRows([
-                    { label: 'PB-SOC-001', value: 'governed', tone: 'var(--yellow)' },
-                    { label: 'PB-SOC-004', value: 'manual approval', tone: 'var(--yellow)' },
-                    { label: 'auto-execute', value: 'disabled', tone: 'var(--green)' }
-                ]);
-                return;
-            }
-            container.innerHTML = data.map(pb => `
-                <div style="font-size:0.75rem; border-bottom:1px solid rgba(255,255,255,0.05); padding:2px 0;">
-                    ${esc(pb.name)}: <span style="color:${pb.auto_execute ? 'var(--green)' : 'var(--yellow)'}">
-                        ${pb.auto_execute ? 'AUTONOMOUS' : 'GOVERNED'}
-                    </span>
-                </div>
-            `).join('');
-        }
+        function getSeverity(r) { return r >= 90 ? 'critical' : r >= 70 ? 'high' : r >= 50 ? 'medium' : 'low'; }
 
         async function refresh() {
-            const selectedRange = el('rangeSelect').value;
-            refreshOperationalStatus();
-            try {
-                const demoQuery = dashboardMode === 'demo' ? '&mode=demo' : '';
-                const response = await fetch(`${API_URL}?range=${encodeURIComponent(selectedRange)}${demoQuery}`, { cache: 'no-store', headers: authHeaders() });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const payload = await response.json();
-                setApiStatus('online');
-                const alerts = Array.isArray(payload) ? payload : (payload.data || []);
-                allAlerts = alerts;
-                const newAlerts = alerts.filter(alert => alert.id && !seenIds.has(alert.id)).slice(0, 5);
-                newAlerts.reverse().forEach(animateAttack);
-                alerts.slice(0, 200).forEach(alert => { if (alert.id) seenIds.add(alert.id); });
-                if (seenIds.size > 600) seenIds = new Set(Array.from(seenIds).slice(-300));
-
-                renderAll(alerts);
-                refreshIncidents();
-                refreshHeatmap();
-                refreshPendingActions();
-                refreshAIScores();
-                if (Date.now() > optionalRefreshAt) {
-                    optionalRefreshAt = Date.now() + 15000;
-                    refreshBilling();
-                    refreshGraphPaths();
-                    refreshSoarStatus();
-                }
-                el('rangeLabel').textContent = `Filtro: ${rangeNames[selectedRange] || selectedRange} | Modo: ${dashboardMode.toUpperCase()}`;
-                el('lastUpdate').textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
-            } catch (error) {
-                setApiStatus('critical', 'API offline');
-                el('lastUpdate').textContent = `API sem resposta às ${new Date().toLocaleTimeString('pt-BR')}`;
-                if (!allAlerts.length) renderAll([]);
-            }
-        }
-
-        function openDrawer(alert) {
-            const fields = [
-                ['IP', alert.source_ip || alert.ip],
-                ['Tenant', alert.tenant_id || 'default'],
-                ['Correlation ID', alert.correlation_id || alert.event_id || 'N/D'],
-                ['Alvo', `${alert.target_host || 'N/D'} / ${alert.target_ip || 'N/D'}`],
-                ['Serviço alvo', `${alert.target_service || alert.service || 'N/D'}:${alert.target_port || alert.port || 'N/D'}`],
-                ['Usuário alvo', alert.target_user || 'N/D'],
-                ['Criticidade do ativo', alert.asset_criticality || 'N/D'],
-                ['Impacto possível', alert.business_impact || 'N/D'],
-                ['Status', alert.status],
-                ['Risco', risk(alert)],
-                ['Score explicado', alert.score_explanation || 'N/D'],
-                ['MITRE', `${alert.mitre_id || 'N/D'} - ${alert.mitre_name || 'N/D'} (${alert.mitre_tactic || 'N/D'})`],
-                ['Regra interna', `${alert.internal_rule_id || 'N/D'} - ${alert.internal_rule_name || 'N/D'}`],
-                ['Correlação', alert.correlation_rule || alert.correlation_key || 'N/D'],
-                ['Playbook recomendado', alert.response_playbook || 'N/D'],
-                ['Ação recomendada', alert.recommended_action || 'N/D'],
-                ['Razão da ação', alert.action_reason || 'N/D'],
-                ['Execução', `${alert.execution_mode || 'simulation'} / ${alert.execution_status || 'not_executed'}`],
-                ['Notas de execução', alert.execution_notes || 'N/D'],
-                ['Explicação', alert.human_summary || alert.explanation || 'N/D'],
-                ['Tipo de evento', alert.event_type],
-                ['Serviço', alert.service],
-                ['Port', alert.port],
-                ['Categoria de ameaça', alert.threat_category || 'N/D'],
-                ['Descrição da ameaça', alert.threat_description || 'N/D'],
-                ['Fonte de ameaça', alert.threat_source || 'N/D'],
-                ['Chave de correlação', alert.correlation_key || 'N/D'],
-                ['Motivo da correlação', alert.correlation_reason || 'N/D'],
-                ['Ocorrências', alert.occurrence_count || 1],
-                ['Primeiro registro', alert.first_seen || 'N/D'],
-                ['Último registro', alert.last_seen || 'N/D'],
-                ['Agregado', alert.aggregated ? 'true' : 'false'],
-                ['Ports observados', Array.isArray(alert.ports) ? alert.ports.join(', ') : (alert.port || 'N/D')],
-                ['Serviços observados', Array.isArray(alert.services) ? alert.services.join(', ') : (alert.service || 'N/D')],
-                ['Tipos de evento', Array.isArray(alert.event_types) ? alert.event_types.join(', ') : (alert.event_type || 'N/D')],
-                ['Ação do SOC', alert.action_soc || alert.auto_response || 'N/D'],
-                ['Bloqueio simulado', alert.simulated_block ? 'true' : 'false'],
-                ['Timestamp', alert.ts],
-                ['IA Insight', alert.ai_anomaly_score ? `${(alert.ai_anomaly_score * 100).toFixed(1)}% anômalo - ${alert.human_summary}` : 'Análise pendente'],
-            ];
-            el('detailContent').innerHTML = fields.map(([label, value]) => `
-                <div class="detail-row">
-                    <div class="detail-label">${esc(label)}</div>
-                    <div>${esc(value)}</div>
-                </div>
-            `).join('');
-            el('drawerBackdrop').classList.add('open');
-            el('detailDrawer').classList.add('open');
-        }
-
-        async function openIpInvestigation(sourceIp) {
-            el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Investigação</div><div><span class="skeleton-line"></span></div></div>';
-            el('drawerBackdrop').classList.add('open');
-            el('detailDrawer').classList.add('open');
-            try {
-                const response = await fetch(`${INVESTIGATION_URL}/${encodeURIComponent(sourceIp)}`, { cache: 'no-store', headers: authHeaders() });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-                const mitres = (data.mitre_techniques || []).map(item => `${item.id} - ${item.name} (${item.tactic})`).join(', ') || 'N/D';
-                const timeline = (data.timeline || []).slice(-12).map(item => `${item.local_time || new Date(item.timestamp).toLocaleString('pt-BR')} | ${item.phase || item.stage} | ${item.event_type} | ${item.severity} | score ${item.score} | ${item.mitre_id || 'N/D'} | ${item.replay_id || 'sem replay'}`).join('\n');
-                const incidents = (data.related_incidents || []).map(item => `${item.incident_id} | ${item.status} | ${item.severity} | score ${item.max_score} | IPs: ${(item.source_ips || [item.source_ip]).join(', ')}`).join('\n') || 'N/D';
-                const recommendations = (data.recommended_actions || []).join('\n') || 'N/D';
-                const fields = [
-                    ['IP investigado', data.source_ip],
-                    ['Score atual', data.current_score],
-                    ['Maior severidade', data.max_severity],
-                    ['Primeiro visto', data.first_seen],
-                    ['Último visto', data.last_seen],
-                    ['Total de eventos', data.event_count],
-                    ['Incidentes relacionados', data.incident_count],
-                    ['Tipos de evento', (data.event_types || []).join(', ') || 'N/D'],
-                    ['Portas/serviços', (data.services || []).join(', ') || 'N/D'],
-                    ['MITRE relacionadas', mitres],
-                    ['Motivos de correlação', (data.correlation_reasons || []).join('; ') || 'N/D'],
-                    ['Ações SOC simuladas', (data.soc_actions || []).join(', ') || 'N/D'],
-                    ['Eventos de replay', (data.replay_events || []).length],
-                    ['Ataque multi-IP', data.is_multi_ip ? 'Sim' : 'Não'],
-                    ['Outros IPs correlacionados', (data.correlated_ips || []).join(', ') || 'N/D'],
-                    ['Incidentes relacionados', incidents],
-                    ['Resumo do Analista', data.analyst_summary || data.human_summary],
-                    ['Próximas ações sugeridas', recommendations],
-                    ['Linha do Tempo', timeline || 'N/D'],
-                ];
-                el('detailContent').innerHTML = fields.map(([label, value]) => `
-                    <div class="detail-row">
-                        <div class="detail-label">${esc(label)}</div>
-                        <div style="white-space:pre-wrap">${esc(value)}</div>
-                    </div>
-                `).join('');
-            } catch (error) {
-                el('detailContent').innerHTML = '<div class="detail-row"><div class="detail-label">Erro</div><div>Falha ao carregar investigação por IP.</div></div>';
-            }
-        }
-
-        function closeDrawer() {
-            el('drawerBackdrop').classList.remove('open');
-            el('detailDrawer').classList.remove('open');
-        }
-
-        function renderSession() {
-            const user = session?.user || {};
-            el('sessionInfo').textContent = user.sub ? `${user.sub} | ${user.role || 'viewer'} | tenant ${user.tenant_id || 'default'}` : 'token legado | admin | tenant default';
-        }
-
-        async function login(event) {
-            event.preventDefault();
-            el('loginButton').disabled = true;
-            try {
-                const response = await fetch(AUTH_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: el('usernameInput').value, password: el('passwordInput').value })
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                session = await response.json();
-                localStorage.setItem('sentinelaSession', JSON.stringify(session));
-                renderSession();
-                connectWebSocket();
-                refresh();
-            } catch (error) {
-                el('sessionInfo').textContent = 'falha no login';
-            } finally {
-                el('loginButton').disabled = false;
-            }
-        }
-
-        function connectWebSocket() {
-            if (!('WebSocket' in window)) {
-                wsStateLabel('WS indisponível', 'degraded');
-                return;
-            }
-            if (wsClient) wsClient.close();
-            if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
-            wsStateLabel('WS conectando', 'degraded');
-            const token = session?.token;
-            const url = token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL;
-            wsClient = new WebSocket(url);
-            wsClient.onopen = () => {
-                wsStateLabel('WS online', 'online');
-            };
-            wsClient.onclose = () => {
-                wsStateLabel(apiState.online ? 'WS reconectando' : 'WS offline', apiState.online ? 'degraded' : 'offline');
-                wsReconnectTimer = setTimeout(connectWebSocket, 3500);
-            };
-            wsClient.onerror = () => {
-                wsStateLabel(apiState.online ? 'WS degraded' : 'WS erro', apiState.online ? 'degraded' : 'offline');
-            };
-            wsClient.onmessage = event => {
-                const payload = JSON.parse(event.data || '{}');
-                if (payload.type !== 'alert' || !payload.data) return;
-                const alert = payload.data;
-                if (alert.id && seenIds.has(alert.id)) return;
-                allAlerts = [alert, ...allAlerts].slice(0, 300);
-                if (alert.id) seenIds.add(alert.id);
-                animateAttack(alert);
+            const data = await apiRequest(`/alertas?range=${el('rangeSelect').value}`);
+            if (data) {
+                allAlerts = Array.isArray(data) ? data : (data.data || []);
                 renderAll(allAlerts);
-                el('lastUpdate').textContent = `Realtime às ${new Date().toLocaleTimeString('pt-BR')}`;
-            };
+                refreshIncidents();
+                refreshOperationalStatus();
+            }
         }
 
-        el('loginForm').addEventListener('submit', login);
-        el('refreshButton').addEventListener('click', refresh);
-        el('simulateAttackButton').addEventListener('click', simulateAttack);
-        el('demoModeButton').addEventListener('click', () => setDashboardMode('demo'));
-        el('historyModeButton').addEventListener('click', () => setDashboardMode('historico'));
-        el('rangeSelect').addEventListener('change', () => {
-            seenIds = new Set();
-            refresh();
-        });
-        ['searchInput', 'severityFilter', 'sourceFilter', 'blockFilter'].forEach(id => {
-            el(id).addEventListener('input', () => renderAll(allAlerts));
-            el(id).addEventListener('change', () => renderAll(allAlerts));
-        });
-        ['incidentStatusFilter', 'incidentSeverityFilter', 'incidentSearchInput'].forEach(id => {
-            el(id).addEventListener('input', refreshIncidents);
-            el(id).addEventListener('change', refreshIncidents);
-        });
-        el('feedBody').addEventListener('click', event => {
-            const ipButton = event.target.closest('[data-source-ip]');
-            if (ipButton) {
-                openIpInvestigation(ipButton.dataset.sourceIp);
-                return;
-            }
-            const row = event.target.closest('[data-alert-id]');
-            if (!row) return;
-            const alert = visibleAlerts.find(item => String(item.id) === row.dataset.alertId);
-            if (alert) openDrawer(alert);
-        });
-        el('incidentsList').addEventListener('click', event => {
-            const item = event.target.closest('[data-incident-id]');
-            if (item) openIncidentDetail(item.dataset.incidentId);
-        });
-        el('detailContent').addEventListener('click', event => {
-            const ipButton = event.target.closest('[data-source-ip]');
-            if (ipButton) {
-                openIpInvestigation(ipButton.dataset.sourceIp);
-                return;
-            }
-            const saveButton = event.target.closest('#saveIncidentButton');
-            if (saveButton) {
-                saveIncidentUpdate(saveButton.dataset.incidentId).catch(() => {
-                    saveButton.textContent = 'Falha ao salvar';
-                });
-                return;
-            }
-            const exportButton = event.target.closest('#exportIncidentButton');
-            if (exportButton) exportIncidentReport(exportButton.dataset.incidentId);
-            const exportPdfButton = event.target.closest('#exportIncidentPdfButton');
-            if (exportPdfButton) exportIncidentPdf(exportPdfButton.dataset.incidentId);
-        });
-        el('closeDrawer').addEventListener('click', closeDrawer);
-        el('drawerBackdrop').addEventListener('click', closeDrawer);
+        async function refreshIncidents() {
+            const data = await apiRequest('/incidents');
+            if (!data) return;
+            const incidents = data.data || [];
+            el('incidentsList').innerHTML = incidents.slice(0, 10).map(i => `
+                <div class="rank-item" onclick="refreshEnterpriseTimeline('${i.incident_id}')">
+                    <span><strong>${esc(i.title)}</strong><br><span class="muted">${i.incident_id} | ${i.status}</span></span>
+                    <strong>${i.max_score}</strong>
+                </div>`).join('');
+            if (incidents[0]) refreshEnterpriseTimeline(incidents[0].incident_id);
+            el('totalEventos').textContent = incidents.length;
+            el('eventosCriticos').textContent = incidents.filter(i => i.severity === 'CRITICAL').length;
+        }
 
-        el('feedBody').innerHTML = `
-            <tr>
-                <td colspan="8">
-                    <div class="empty-state">
-                        <strong>Inicializando console SOC</strong>
-                        <span class="skeleton-line"></span>
-                        <span>API, WebSocket e widgets auxiliares serão atualizados em instantes.</span>
-                    </div>
-                </td>
-            </tr>`;
-        el('incidentsList').innerHTML = renderPlaceholderRows();
-        refreshHeatmap();
-        refreshPendingActions();
-        refreshAIScores();
-        refreshSoarStatus();
-        refreshBilling();
-        refreshGraphPaths();
-        renderStaticPoints([]);
-        renderSession();
-        refreshOperationalStatus(true);
-        connectWebSocket();
+        function renderAll(alerts) {
+            renderFeed(alerts);
+            el('ipsUnicos').textContent = new Set(alerts.map(a => a.source_ip || a.ip)).size;
+            el('bloqueios').textContent = Math.max(0, ...alerts.map(risk));
+        }
+
+        async function openIncidentDetail(id) {
+            el('drawerBackdrop').classList.add('open');
+            el('detailDrawer').classList.add('open');
+            const data = await apiRequest(`/incidents/${id}`);
+            if (data) el('detailContent').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        }
+
+        function connectSocketIO() {
+            if (typeof io !== 'function') return;
+            socketClient = io(API_ORIGIN, { auth: { token: session?.access_token || LEGACY_API_TOKEN } });
+            socketClient.on('connect', () => setPill('wsStatus', 'WS', 'online'));
+            socketClient.on('security_event', data => { allAlerts = [data, ...allAlerts].slice(0, 500); renderAll(allAlerts); });
+            socketClient.on('incident_created', refreshIncidents);
+        }
+
+        // INIT
+        el('loginForm').addEventListener('submit', async e => {
+            e.preventDefault();
+            const res = await fetch(AUTH_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: el('usernameInput').value, password: el('passwordInput').value }) });
+            if (res.ok) { session = await res.json(); localStorage.setItem('sentinelaSession', JSON.stringify(session)); location.reload(); }
+        });
+
+        let editorInstance;
+        require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs' }});
+        require(['vs/editor/editor.main'], () => {
+            editorInstance = monaco.editor.create(el('monacoEditor'), { value: '{"rule_id": "test_rule"}', language: 'json', theme: 'vs-dark', minimap: { enabled: false } });
+        });
+
+        el('refreshButton').addEventListener('click', refresh);
+        el('rangeSelect').addEventListener('change', refresh);
+        el('closeDrawer').addEventListener('click', () => { el('drawerBackdrop').classList.remove('open'); el('detailDrawer').classList.remove('open'); });
+
+        
+        
+        // True Masonry: Ocultação absoluta se vazio (zero pixels)
+        
+        // Ocultação Absoluta se vazio (Zero pixels e Zero vácuo)
+        function enforceAbsoluteMasonryPacking() {
+            const targets = [
+                { contentId: 'attackChains', wrapId: 'attackChainWrapper' },
+                { contentId: 'replayResults', wrapId: 'replayPanel' },
+                { contentId: 'iocResults', wrapId: 'iocPanel' },
+                { contentId: 'ai-scores-list', wrapId: 'aiIntelligencePanel' },
+                { contentId: 'soar-status', wrapId: 'soarPanel' }
+            ];
+            
+            targets.forEach(t => {
+                const contentEl = el(t.contentId);
+                const wrapperEl = el(t.wrapId);
+                if (contentEl && wrapperEl) {
+                    // Check if has children and isn't just empty text or placeholder
+                    const hasChildren = contentEl.children.length > 0;
+                    const hasRealText = contentEl.innerText.trim().length > 10; // Avoid "Aguardando..."
+                    const isVisible = hasChildren || hasRealText;
+                    
+                    if (!isVisible) {
+                        wrapperEl.style.setProperty('display', 'none', 'important');
+                    } else {
+                        wrapperEl.style.setProperty('display', 'inline-block', 'important');
+                    }
+                }
+            });
+        }
+,
+                { id: 'replayResults', wrapId: 'replayPanel' },
+                { id: 'iocResults', wrapId: 'iocPanel' },
+                { id: 'ai-scores-list', wrapId: 'aiIntelligencePanel' },
+                { id: 'soar-status', wrapId: 'soarPanel' }
+            ];
+            
+            rules.forEach(r => {
+                const content = el(r.id);
+                const wrapper = el(r.wrapId);
+                if (content && wrapper) {
+                    const hasData = content.innerHTML.trim() !== "" && 
+                                  !content.innerHTML.includes("empty-state") &&
+                                  !content.innerHTML.includes("Aguardando");
+                    
+                    // Se não tiver filhos reais ou for placeholder, desaparece do layout
+                    if (!hasData || content.children.length === 0) {
+                        wrapper.style.setProperty('display', 'none', 'important');
+                    } else {
+                        wrapper.style.setProperty('display', 'inline-block', 'important');
+                    }
+                }
+            });
+        }
+        
+        // Hooks de Refresh
+        const _refreshInc = refreshIncidents;
+        refreshIncidents = async function() { await _refreshInc(); enforceAbsoluteMasonryPacking(); };
+        
+        const _refreshCorr = refreshCorrelation;
+        refreshCorrelation = async function() { await _refreshCorr(); enforceAbsoluteMasonryPacking(); };
+
+        connectSocketIO();
         refresh();
-        refreshIncidents();
-        setInterval(refresh, 2500);
-        setInterval(() => refreshOperationalStatus(true), 15000);
+        setInterval(refresh, 10000);
+        setInterval(refreshOperationalStatus, 30000);
     </script>
 </body>
 </html>

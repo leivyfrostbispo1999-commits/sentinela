@@ -129,3 +129,14 @@ First implementation slice:
 - Multi-tenant isolation and per-tenant RBAC.
 - AI operations: triage summaries and SOC hypothesis generation.
 - High availability with replication and failover.
+
+## Oracle Distributed Track
+
+The Oracle deployment should evolve as a small distributed system, not as one overloaded VM:
+
+- Phase 1: preserve the current AMD micro core.
+- Phase 2: add an auxiliary event bus node with NATS JetStream when A1 capacity is available.
+- Phase 3: add OpenSearch on a separate threat hunting node.
+- Phase 4: add Neo4j on a separate graph analysis node.
+
+Details live in `docs/DISTRIBUTED_ORACLE_ROLLOUT.md`.

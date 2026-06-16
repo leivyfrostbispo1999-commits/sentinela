@@ -1,0 +1,23 @@
+id: ssh_bruteforce
+name: SSH brute force
+description: Multiplas falhas de login SSH a partir da mesma origem.
+severity: HIGH
+score: 85
+event_type: BRUTE_FORCE
+condition:
+  event_type:
+    - FAILED_LOGIN
+    - SSH_FAILED
+  service: ssh
+group_by: source_ip
+window_seconds: 300
+threshold: 5
+mitre:
+  tactic: Credential Access
+  technique: T1110
+  technique_name: Brute Force
+tags:
+  - ssh
+  - brute_force
+recommended_action: Bloquear temporariamente a origem, revisar contas afetadas e validar tentativas bem-sucedidas no mesmo intervalo.
+

@@ -90,11 +90,13 @@ def test_legacy_token_is_accepted(monkeypatch):
 
 def test_jwt_is_created_and_accepted(monkeypatch):
     api = load_api(monkeypatch)
-    token = api.create_jwt(subject="pytest", ttl_seconds=60, role="analyst", tenant_id="tenant-a")
+    token = api.create_jwt(subject="pytest", ttl_seconds=60, role="analyst", tenant_id="tenant-a", session_id="sess-1", user_id=42)
 
     assert api.verify_jwt(token) is True
     assert api.decode_jwt(token)["role"] == "analyst"
     assert api.decode_jwt(token)["tenant_id"] == "tenant-a"
+    assert api.decode_jwt(token)["session_id"] == "sess-1"
+    assert api.decode_jwt(token)["user_id"] == 42
     with api.app.test_request_context(headers={"Authorization": f"Bearer {token}"}):
         assert api.token_is_valid() is True
 
@@ -170,6 +172,54 @@ def test_auth_me_returns_role_tenant_and_permissions(monkeypatch):
     assert payload["user"]["tenant_id"] == "tenant-a"
     assert payload["user"]["auth_enabled"] is True
     assert "incident:update" in payload["user"]["permissions"]
+
+
+def test_password_policy_requires_length_and_complexity(monkeypatch):
+    api = load_api(monkeypatch)
+
+    assert "minimum_length_10" in api.password_policy_errors("short")
+    assert api.password_policy_errors("StrongerPass1") == []
+
+
+def test_operator_can_validate_rules_but_analyst_cannot(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    client = api.app.test_client()
+    operator = api.create_jwt(subject="operator", role="operator", tenant_id="default")
+    analyst = api.create_jwt(subject="analyst", role="analyst", tenant_id="default")
+
+    rule = {
+        "rule_id": "pytest_rule",
+        "title": "Pytest Rule",
+        "description": "Rule validation test.",
+        "severity": "MEDIUM",
+        "score": 50,
+        "tactic": "Credential Access",
+        "technique": "T1110",
+        "conditions": {"event_type": "FAILED_LOGIN"},
+    }
+
+    allowed = client.post("/api/rules/validate", json={"rule": rule}, headers={"Authorization": f"Bearer {operator}"})
+    denied = client.post("/api/rules/validate", json={"rule": rule}, headers={"Authorization": f"Bearer {analyst}"})
+
+    assert allowed.status_code == 200
+    assert denied.status_code == 403
+
+
+def test_admin_create_user_enforces_password_policy(monkeypatch):
+    monkeypatch.setenv("ENABLE_AUTH", "true")
+    api = load_api(monkeypatch)
+    token = api.create_jwt(subject="admin", role="admin", tenant_id="default")
+    client = api.app.test_client()
+
+    response = client.post(
+        "/api/admin/users",
+        json={"username": "new-user", "password": "weak", "role": "viewer"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "password_policy_failed"
 
 
 def test_viewer_cannot_update_incident(monkeypatch):

@@ -1,0 +1,4 @@
+nats-py==2.7.2
+prometheus-client==0.20.0
+websockets==12.0
+

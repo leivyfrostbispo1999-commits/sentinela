@@ -1,0 +1,20 @@
+id: reverse_shell
+name: Reverse shell indicator
+description: Comando compativel com reverse shell detectado em logs.
+severity: CRITICAL
+score: 95
+event_type: REVERSE_SHELL
+condition:
+  event_type: REVERSE_SHELL
+group_by: host
+window_seconds: 60
+threshold: 1
+mitre:
+  tactic: Execution
+  technique: T1059
+  technique_name: Command and Scripting Interpreter
+tags:
+  - reverse_shell
+  - execution
+recommended_action: Isolar o host afetado, preservar processos e conexoes, e iniciar resposta a incidente.
+
